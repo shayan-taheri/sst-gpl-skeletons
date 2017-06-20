@@ -38,6 +38,7 @@
 #include <outstream.hpp>
 
 #include <TypeTraits.hpp>
+#include <matrixTypes.hpp>
 
 namespace miniFE {
 

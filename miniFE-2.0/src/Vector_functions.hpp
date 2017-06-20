@@ -96,7 +96,7 @@ void sum_into_vector(size_t num_indices,
   GlobalOrdinal last = first + vec.local_size - 1;
 
   std::vector<Scalar>& vec_coefs = vec.coefs;
-
+#pragma sst loop_count Hex8::numNodesPerElem
   for(size_t i=0; i<num_indices; ++i) {
     if (indices[i] < first || indices[i] > last) continue;
     size_t idx = indices[i] - first;

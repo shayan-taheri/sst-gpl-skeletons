@@ -82,13 +82,13 @@ make_local_matrix(MatrixType& A)
   ///////////////////////////////////////////
 
   std::vector<GlobalOrdinal>& external_index = A.external_index;
-
+#pragma sst compute
   for(size_t i=0; i<A.rows.size(); ++i) {
     GlobalOrdinal* Acols = NULL;
     Scalar* Acoefs = NULL;
     size_t row_len = 0;
     A.get_row_pointers(A.rows[i], row_len, Acols, Acoefs);
-
+#pragma sst loop_count 27
     for(size_t j=0; j<row_len; ++j) {
       GlobalOrdinal cur_ind = Acols[j];
       if (start_row <= cur_ind && cur_ind <= stop_row) {
@@ -163,13 +163,13 @@ make_local_matrix(MatrixType& A)
       }
     }
   }
-
+#pragma sst compute
   for(size_t i=0; i<local_nrow; ++i) {
     GlobalOrdinal* Acols = NULL;
     Scalar* Acoefs = NULL;
     size_t row_len = 0;
     A.get_row_pointers(A.rows[i], row_len, Acols, Acoefs);
-
+#pragma sst loop_count 27
     for(size_t j=0; j<row_len; ++j) {
       if (Acols[j] < 0) { // Change index values of externals
         GlobalOrdinal cur_ind = -Acols[j] - 1;
@@ -418,7 +418,7 @@ make_local_matrix(MatrixType& A)
   }
 
   /// replace global indices by local indices ///
-
+#pragma sst compute
   for(GlobalOrdinal i=0; i<total_to_be_sent; ++i) {
     A.elements_to_send[i] -= start_row;
     if (A.elements_to_send[i] >= A.rows.size()) {

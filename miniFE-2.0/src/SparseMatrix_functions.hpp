@@ -100,6 +100,7 @@ void sort_with_companions(ptrdiff_t len, T* array, U* companions)
   }
 }
 
+#pragma sst delete
 void write_matrix(const std::string& filename, 
                   MatrixType& mat)
 {
@@ -151,6 +152,7 @@ sum_into_row(int row_len,
              const GlobalOrdinal* input_indices,
              const Scalar* input_coefs)
 {
+#pragma sst loop_count 27
   for(size_t i=0; i<num_inputs; ++i) {
     GlobalOrdinal* loc = std::lower_bound(row_indices, row_indices+row_len,
                                           input_indices[i]);
@@ -199,6 +201,7 @@ sum_in_symm_elem_matrix(size_t num,
 
   int row_offset = 0;
   bool flag = false;
+#pragma sst loop_count Hex8::numNodesPerElem
   for(size_t i=0; i<num; ++i) {
     GlobalOrdinal row = indices[i];
  
@@ -218,6 +221,7 @@ sum_in_symm_elem_matrix(size_t num,
                  row_len, row_col_inds, row_coefs);
 
     int offset = i;
+#pragma sst loop_count Hex8::numNodesPerElem/2
     for(size_t j=0; j<i; ++j) {
       Scalar coef = coefs[offset];
 //std::cout<<"i: "<<i<<", j: "<<j<<", offset: "<<offset<<std::endl;
@@ -282,6 +286,7 @@ sum_into_global_linear_system(ElemData<GlobalOrdinal,Scalar>& elem_data,
 void
 add_to_diagonal(MatrixType::ScalarType value, MatrixType& mat)
 {
+#pragma sst compute
   for(size_t i=0; i<mat.rows.size(); ++i) {
     sum_into_row(mat.rows[i], 1, &mat.rows[i], &value, mat);
   }
@@ -323,9 +328,7 @@ void rearrange_matrix_local_external(MatrixType& A)
   typedef MatrixType::ScalarType Scalar;
 
   size_t nrows = A.rows.size();
-#pragma sst null_variable
   std::vector<LocalOrdinal> tmp_row_offsets(nrows*2);
-#pragma sst null_variable
   std::vector<LocalOrdinal> tmp_row_offsets_external(nrows*2);
 
   LocalOrdinal num_local_nz = 0;
@@ -336,6 +339,7 @@ void rearrange_matrix_local_external(MatrixType& A)
   //tmp_row_offsets describe the locations of the local entries, and
   //tmp_row_offsets_external describe the locations of the external entries.
   //
+#pragma sst compute
   for(size_t i=0; i<nrows; ++i) {
     GlobalOrdinal* row_begin = &A.packed_cols[A.row_offsets[i]];
     GlobalOrdinal* row_end = &A.packed_cols[A.row_offsets[i+1]];
@@ -362,15 +366,14 @@ void rearrange_matrix_local_external(MatrixType& A)
   }
 
   //Next, copy the external entries into separate arrays.
-#pragma sst null_variable
   std::vector<GlobalOrdinal> ext_cols(num_extern_nz);
-#pragma sst null_variable
   std::vector<Scalar> ext_coefs(num_extern_nz);
-#pragma sst null_variable
   std::vector<LocalOrdinal> ext_offsets(nrows+1);
   LocalOrdinal offset = 0;
+#pragma sst compute
   for(size_t i=0; i<nrows; ++i) {
     ext_offsets[i] = offset;
+#pragma sst loop_count 27
     for(LocalOrdinal j=tmp_row_offsets_external[i*2];
                      j<tmp_row_offsets_external[i*2+1]; ++j) {
       ext_cols[offset] = A.packed_cols[j];
@@ -380,11 +383,12 @@ void rearrange_matrix_local_external(MatrixType& A)
   ext_offsets[nrows] = offset;
 
   //Now slide all local entries down to the beginning of A's packed arrays
-#pragma sst new
   A.row_offsets.resize(nrows+1);
   offset = 0;
+#pragma sst compute
   for(size_t i=0; i<nrows; ++i) {
     A.row_offsets[i] = offset;
+#pragma sst loop_count 27
     for(LocalOrdinal j=tmp_row_offsets[i*2]; j<tmp_row_offsets[i*2+1]; ++j) {
       A.packed_cols[offset] = A.packed_cols[j];
       A.packed_coefs[offset++] = A.packed_coefs[j];
@@ -394,13 +398,14 @@ void rearrange_matrix_local_external(MatrixType& A)
 
   //Finally, copy the external entries back into A.packed_cols and
   //A.packed_coefs, starting at the end of the local entries.
-
+#pragma sst compute
   for(LocalOrdinal i=offset; i<offset+ext_cols.size(); ++i) {
     A.packed_cols[i] = ext_cols[i-offset];
     A.packed_coefs[i] = ext_coefs[i-offset];
   }
 
   A.row_offsets_external.resize(nrows+1);
+#pragma sst compute
   for(size_t i=0; i<=nrows; ++i) A.row_offsets_external[i] = ext_offsets[i] + offset;
 }
 
@@ -458,7 +463,7 @@ impose_dirichlet(MatrixType::ScalarType prescribed_value,
     GlobalOrdinal row = A.rows[i];
 
     if (bc_rows.find(row) != bc_rows.end()) continue;
-
+  #pragma sst replace row_length 27
     size_t row_length = 0;
     GlobalOrdinal* cols = NULL;
     Scalar* coefs = NULL;
@@ -513,7 +518,8 @@ void operator()(MatrixType& A,
 
                 MINIFE_SCALAR sum = 0;
 
-                #pragma loop_count(15)
+
+                #pragma sst loop_count 15
                 for(MINIFE_GLOBAL_ORDINAL i = row_start; i < row_end; ++i) {
                         sum += Acoefs[i] * xcoefs[Acols[i]];
                 }

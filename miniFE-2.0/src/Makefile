@@ -12,8 +12,11 @@ MINIFE_MATRIX_TYPE = -DMINIFE_CSR_MATRIX
 
 #-----------------------------------------------------------------------
 
-CFLAGS = -O3 -fopenmp
+CFLAGS = -O3 -fPIC
+#CFLAGS += -fopenmp
+CFLAGS += -D_OPENMP
 CXXFLAGS = $(CFLAGS)
+
 
 CPPFLAGS = -I. -I../utils -I../fem $(MINIFE_TYPES) \
 	$(MINIFE_MATRIX_TYPE) \
@@ -23,19 +26,10 @@ CPPFLAGS = -I. -I../utils -I../fem $(MINIFE_TYPES) \
 LDFLAGS=$(CFLAGS)
 LIBS=
 
-# The MPICH_IGNORE_CXX_SEEK macro is required for some mpich versions,
-# such as the one on my cygwin machine.
+#CXX=mpicxx
+#CC=mpicc
 
-#CXX=mpiicpc
-#CC=mpiicc
-
-#CXX=g++
-#CC=g++
-
-#CXX=icpc
-#CC=icc
-
-CXX=mpicxx
-CC=mpicc
+CXX=sst++
+CC=sstcc
 
 include make_targets

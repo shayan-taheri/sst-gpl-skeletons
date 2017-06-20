@@ -77,6 +77,8 @@ void add_timestring_to_yaml(YAML_Doc& doc);
 //vector, then solve the linear-system using Conjugate Gradients.
 //
 
+#define sstmac_app_name miniFE
+
 int main(int argc, char** argv) {
   miniFE::Parameters params;
   miniFE::get_parameters(argc, argv, params);

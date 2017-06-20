@@ -60,34 +60,38 @@ CSRMatrix {
   typedef GlobalOrdinal GlobalOrdinalType;
 
   bool                       has_local_indices;
+#pragma sst null_variable except size new resize
   std::vector<GlobalOrdinal> rows;
+#pragma sst null_variable except size new resize
   std::vector<LocalOrdinal>  row_offsets;
+#pragma sst null_variable except size new resize
   std::vector<LocalOrdinal>  row_offsets_external;
+#pragma sst null_variable except size new resize
   std::vector<GlobalOrdinal> packed_cols;
+#pragma sst null_variable except size new resize
   std::vector<Scalar>        packed_coefs;
   LocalOrdinal               num_cols;
 
 #ifdef HAVE_MPI
-#pragma sst null_variable
+#pragma sst null_variable except size new resize
   std::vector<GlobalOrdinal> external_index;
-#pragma sst null_variable
+#pragma sst null_variable except size new resize
   std::vector<GlobalOrdinal>  external_local_index;
-#pragma sst null_variable
+#pragma sst null_variable except size new resize
   std::vector<GlobalOrdinal> elements_to_send;
   std::vector<int>           neighbors;
   std::vector<LocalOrdinal>  recv_length;
   std::vector<LocalOrdinal>  send_length;
-#pragma sst null_variable
   std::vector<Scalar>        send_buffer;
   std::vector<MPI_Request>   request;
 #endif
 
   size_t num_nonzeros() const
   {
+#pragma sst return rows.size()*27
     return row_offsets[row_offsets.size()-1];
   }
 
-#pragma sst new
   void reserve_space(unsigned nrows, unsigned ncols_per_row)
   {
     rows.resize(nrows);
