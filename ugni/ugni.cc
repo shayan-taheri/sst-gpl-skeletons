@@ -109,6 +109,53 @@ class gni_smsg_message : public gni_message {
   int tag_;
 };
 
+class ugni_transport : public sstmac::sumi_transport
+{
+  RegisterAPI("mpi", ugni_transport)
+ public:
+  ugni_transport(sprockit::sim_parameters* params,
+                 sstmac::sw::software_id sid,
+                 sstmac::sw::operating_system* os) :
+    sstmac::sumi_transport(params, sid, os),
+    pending_smsg_(4) //leave room for 4 cq for now, this can grow
+  {
+  }
+
+  int allocate_cq(){
+    int new_cq = sstmac::sumi_transport::allocate_cq();
+    if (new_cq >= pending_smsg_.size()){
+      pending_smsg_.resize(new_cq+1);
+    }
+    return new_cq;
+  }
+
+  void set_pending_smsg(int cq_id, gni_smsg_message* smsg){
+    pending_smsg_[cq_id] = smsg;
+  }
+
+  gni_smsg_message* take_pending_smsg(int cq_id){
+    auto ret = pending_smsg_[cq_id];
+    pending_smsg_[cq_id] = nullptr;
+    return ret;
+  }
+
+  gni_return_t cg_get_event(gni_cq_handle_t cq_hndl, gni_cq_entry_t* event_data){
+    sumi::message* msg = blocking_poll(cq_hndl);
+    intptr_t msgPtr = (intptr_t) msg;
+    *event_data = msgPtr;
+    return GNI_RC_SUCCESS;
+  }
+
+ private:
+  std::vector<gni_smsg_message*> pending_smsg_;
+};
+
+ugni_transport* sstmac_ugni()
+{
+  sstmac::sw::thread* t = sstmac::sw::operating_system::current_thread();
+  return t->get_api<ugni_transport>();
+}
+
 extern "C" gni_return_t
 GNI_GetCompleted(
   gni_cq_handle_t cq_hndl,
@@ -121,36 +168,12 @@ GNI_GetCompleted(
   return GNI_RC_SUCCESS;
 }
 
-class ugni_transport : public sstmac::sumi_transport
-{
-  RegisterAPI("mpi", ugni_transport)
- public:
-  ugni_transport(sprockit::sim_parameters* params,
-                 sstmac::sw::software_id sid,
-                 sstmac::sw::operating_system* os) :
-    sstmac::sumi_transport(params, sid, os)
-  {
-  }
-
-  gni_return_t cg_get_event(gni_cq_handle_t cq_hndl, gni_cq_entry_t* event_data){
-    sumi::message* msg = blocking_poll(cq_hndl);
-    intptr_t msgPtr = (intptr_t) msg;
-    *event_data = msgPtr;
-    return GNI_RC_SUCCESS;
-  }
-};
-
-ugni_transport* sstmac_ugni()
-{
-  sstmac::sw::thread* t = sstmac::sw::operating_system::current_thread();
-  return t->get_api<ugni_transport>();
-}
-
 extern "C" gni_return_t
 GNI_CqGetEvent(
   gni_cq_handle_t cq_hndl,
   gni_cq_entry_t* event_data) {
-  sumi::message* msg = sstmac_ugni()->poll(true, cq_hndl, -1); //no timeout
+  double timeout = 10e-3; //try for at least 10 ms
+  sumi::message* msg = sstmac_ugni()->poll(true, cq_hndl, timeout);
   intptr_t msg_ptr = (intptr_t) static_cast<gni_message*>(msg);
   *event_data = msg_ptr;
   return GNI_RC_SUCCESS;
@@ -819,24 +842,62 @@ extern "C" gni_return_t GNI_SmsgSendWTag(
   return GNI_RC_SUCCESS;
 }
 
+static gni_smsg_message* poll_for_next_smsg(ugni_transport* api, int cq_id){
+  double timeout = 10e-3; //block for at least 10 ms
+  sumi::message* msg = api->poll(sumi::message::eager_payload, true, cq_id, timeout);
+  if (msg->payload_type() == sumi::message::eager_payload){
+    return dynamic_cast<gni_smsg_message*>(msg);
+  } else {
+    return nullptr;
+  }
+}
+
 extern "C" gni_return_t GNI_SmsgGetNext(
   gni_ep_handle_t     ep_hndl,
   void                **header) {
-  spkt_abort_printf("unimplemented: GNI_SmsgGetNext()");
-  return GNI_RC_SUCCESS;
+  ugni_transport* api = sstmac_ugni();
+  auto smsg = poll_for_next_smsg(api, ep_hndl->cq_id);
+  if (smsg){
+    *header = smsg->local_buffer().ptr;
+    return GNI_RC_SUCCESS;
+  } else {
+    return GNI_RC_NOT_DONE;
+  }
 }
 
 extern "C" gni_return_t GNI_SmsgGetNextWTag(
   gni_ep_handle_t     ep_hndl,
   void                **header,
   uint8_t             *tag) {
-  spkt_abort_printf("unimplemented: GNI_SmsgGetNextWTag()");
-  return GNI_RC_SUCCESS;
+  ugni_transport* api = sstmac_ugni();
+  auto smsg = poll_for_next_smsg(api, ep_hndl->cq_id);
+  if (smsg){
+    if (*tag == GNI_SMSG_ANY_TAG){
+      api->set_pending_smsg(ep_hndl->cq_id, smsg);
+      *tag = smsg->tag();
+      return GNI_RC_SUCCESS;
+    } else if (*tag == smsg->tag()){
+      api->set_pending_smsg(ep_hndl->cq_id, smsg);
+      *tag = smsg->tag();
+      return GNI_RC_SUCCESS;
+    } else {
+      return GNI_RC_NO_MATCH;
+    }
+  } else {
+    return GNI_RC_NOT_DONE;
+  }
 }
 
 extern "C" gni_return_t GNI_SmsgRelease(
   gni_ep_handle_t      ep_hndl) {
-  spkt_abort_printf("unimplemented: GNI_SmsgRelease()");
+  gni_smsg_message* smsg = sstmac_ugni()->take_pending_smsg(ep_hndl->cq_id);
+  if (!smsg){
+    return GNI_RC_INVALID_STATE;
+  } else {
+    char* buffer = (char*) smsg->local_buffer().ptr;
+    if (buffer) delete[] buffer;
+    delete smsg;
+  }
   return GNI_RC_SUCCESS;
 }
 
