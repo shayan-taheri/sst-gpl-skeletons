@@ -140,7 +140,7 @@ KERNEL_PREFIX void gradients_and_detJ(const Scalar* elemNodeCoords,
   Scalar J22 = zero;
 
   size_t i_X_spatialDim = 0;
-  for(size_t i=0; i<numNodesPerElem; ++i) {
+  for(size_t i=0; i<Hex8::numNodesPerElem; ++i) {
 //    size_t offset = 0;
 //    for(size_t gd=0; gd<spatialDim; ++gd) {
 //
@@ -208,7 +208,7 @@ KERNEL_PREFIX void gradients_and_invJ_and_detJ(const Scalar* elemNodeCoords,
   Scalar J22 = zero;
 
   size_t i_X_spatialDim = 0;
-  for(size_t i=0; i<numNodesPerElem; ++i) {
+  for(size_t i=0; i<Hex8::numNodesPerElem; ++i) {
 //    size_t offset = 0;
 //    for(size_t gd=0; gd<spatialDim; ++gd) {
 //
@@ -261,7 +261,7 @@ KERNEL_PREFIX void diffusionMatrix_symm(const Scalar* elemNodeCoords,
                         const Scalar* grad_vals,
                         Scalar* elem_mat)
 {
-  int len = (numNodesPerElem * (numNodesPerElem+1))/2;
+  int len = (Hex8::numNodesPerElem * (Hex8::numNodesPerElem+1))/2;
   const Scalar zero = 0;
   miniFE::fill(elem_mat, elem_mat+len, zero);
 
@@ -273,7 +273,7 @@ KERNEL_PREFIX void diffusionMatrix_symm(const Scalar* elemNodeCoords,
   const Scalar k = 1.0;
   Scalar detJ = 0.0;
 
-  Scalar dpsidx[numNodesPerElem], dpsidy[numNodesPerElem], dpsidz[numNodesPerElem];
+  Scalar dpsidx[Hex8::numNodesPerElem], dpsidy[Hex8::numNodesPerElem], dpsidz[Hex8::numNodesPerElem];
 
   Scalar invJ[spatialDim*spatialDim];
 
@@ -289,16 +289,16 @@ KERNEL_PREFIX void diffusionMatrix_symm(const Scalar* elemNodeCoords,
 #endif
 
   size_t gv_offset = 0;
-  for(size_t ig=0; ig<numGaussPointsPerDim; ++ig) {
+  for(size_t ig=0; ig<Hex8::numGaussPointsPerDim; ++ig) {
     Scalar wi = gwts[ig];
 
-    for(size_t jg=0; jg<numGaussPointsPerDim; ++jg) {
+    for(size_t jg=0; jg<Hex8::numGaussPointsPerDim; ++jg) {
       Scalar wi_wj = wi*gwts[jg];
 
-      for(size_t kg=0; kg<numGaussPointsPerDim; ++kg) {
+      for(size_t kg=0; kg<Hex8::numGaussPointsPerDim; ++kg) {
         Scalar wi_wj_wk = wi_wj*gwts[kg];
         const Scalar* grad_vals_ptr = &grad_vals[gv_offset];
-        gv_offset += numNodesPerElem*spatialDim;
+        gv_offset += Hex8::numNodesPerElem*spatialDim;
         gradients_and_invJ_and_detJ(elemNodeCoords, grad_vals_ptr, invJ, detJ);
 
 #ifdef MINIFE_DEBUG
@@ -307,7 +307,7 @@ KERNEL_PREFIX void diffusionMatrix_symm(const Scalar* elemNodeCoords,
         Scalar k_detJ_wi_wj_wk = k*detJ*wi_wj_wk;
 
         const Scalar* gv = grad_vals_ptr;
-        for(int i=0; i<numNodesPerElem; ++i) {
+        for(int i=0; i<Hex8::numNodesPerElem; ++i) {
           Scalar gv0 = gv[0], gv1 = gv[1], gv2 = gv[2];
           dpsidx[i] = gv0 * invJ[0] +
                       gv1 * invJ[1] +
@@ -322,7 +322,7 @@ KERNEL_PREFIX void diffusionMatrix_symm(const Scalar* elemNodeCoords,
         }
 
         int offset = 0;
-        for(int m=0; m<numNodesPerElem; ++m) {
+        for(int m=0; m<Hex8::numNodesPerElem; ++m) {
           const Scalar dpsidx_m = dpsidx[m];
           const Scalar dpsidy_m = dpsidy[m];
           const Scalar dpsidz_m = dpsidz[m];
@@ -332,7 +332,8 @@ KERNEL_PREFIX void diffusionMatrix_symm(const Scalar* elemNodeCoords,
                                (dpsidy_m*dpsidy_m) +
                                (dpsidz_m*dpsidz_m));
 
-          for(int n=m+1; n<numNodesPerElem; ++n) {
+       #pragma sst loop_count Hex8::numNodesPerElem/2
+          for(int n=m+1; n<Hex8::numNodesPerElem; ++n) {
             elem_mat[offset++] += k_detJ_wi_wj_wk *
                                   ((dpsidx_m * dpsidx[n]) +
                                    (dpsidy_m * dpsidy[n]) +
@@ -365,43 +366,43 @@ KERNEL_PREFIX void sourceVector(const Scalar* elemNodeCoords,
                                 const Scalar* grad_vals,
                                 Scalar* elem_vec)
 {
-  int len = numNodesPerElem;
+  int len = Hex8::numNodesPerElem;
   const Scalar zero = 0;
   miniFE::fill(elem_vec, elem_vec+len, zero);
 
-  Scalar gpts[numGaussPointsPerDim];
-  Scalar gwts[numGaussPointsPerDim];
+  Scalar gpts[Hex8::numGaussPointsPerDim];
+  Scalar gwts[Hex8::numGaussPointsPerDim];
 
-  Scalar psi[numNodesPerElem];
+  Scalar psi[Hex8::numNodesPerElem];
 
-  gauss_pts(numGaussPointsPerDim, gpts, gwts);
+  gauss_pts(Hex8::numGaussPointsPerDim, gpts, gwts);
 
   Scalar Q = 1.0;
 
   Scalar pt[spatialDim];
 
   size_t gv_offset = 0;
-  for(size_t ig=0; ig<numGaussPointsPerDim; ++ig) {
+  for(size_t ig=0; ig<Hex8::numGaussPointsPerDim; ++ig) {
     pt[0] = gpts[ig];
     Scalar wi = gwts[ig];
 
-    for(size_t jg=0; jg<numGaussPointsPerDim; ++jg) {
+    for(size_t jg=0; jg<Hex8::numGaussPointsPerDim; ++jg) {
       pt[1] = gpts[jg];
       Scalar wj = gwts[jg];
 
-      for(size_t kg=0; kg<numGaussPointsPerDim; ++kg) {
+      for(size_t kg=0; kg<Hex8::numGaussPointsPerDim; ++kg) {
         pt[2] = gpts[kg];
         Scalar wk = gwts[kg];
     
         shape_fns(pt, psi);
         const Scalar* grad_vals_ptr = &grad_vals[gv_offset];
-        gv_offset += numNodesPerElem*spatialDim;
+        gv_offset += Hex8::numNodesPerElem*spatialDim;
         Scalar detJ;
         gradients_and_detJ(elemNodeCoords, grad_vals_ptr, detJ);
     
         Scalar term = Q*detJ*wi*wj*wk;
 
-        for(int i=0; i<numNodesPerElem; ++i) {
+        for(int i=0; i<Hex8::numNodesPerElem; ++i) {
           elem_vec[i] += psi[i]*term;
         }
       }

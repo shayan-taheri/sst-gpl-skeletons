@@ -84,7 +84,7 @@ void sort_with_companions(ptrdiff_t len, T* array, U* companions)
 {
   ptrdiff_t i, j, index;
   U companion;
-
+#pragma sst loop_count 27
   for (i=1; i < len; i++) {
     index = array[i];
     companion = companions[i];
