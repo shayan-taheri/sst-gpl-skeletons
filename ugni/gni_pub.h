@@ -765,17 +765,6 @@ typedef enum {
 
 /* Transaction descriptor */
 typedef struct gni_post_descriptor {
-        /********************** Control **********************/
-        /* points to the next descriptor in the link list */
-        void *next_descr;       
-        /* points to the previous descriptor in the link list */
-        void *prev_descr;       
-        /* holds an ID of the transaction assigned by the user */
-        uint64_t post_id;    
-        /* error status of the transaction */
-        uint64_t status;        
-        /* completion flag of the transaction */
-        uint16_t cq_mode_complete;
         /********************** Common ***********************/
         /* type of the transaction */
         gni_post_type_t type;   
@@ -814,13 +803,6 @@ typedef struct gni_post_descriptor {
         /****************** CQWrite specific *****************/
         /* cqwrite value - only 6 least significant bytes available to software */
         uint64_t cqwrite_value;
-        /****************** CE specific **********************/
-        /* CE command */
-        gni_ce_cmd_type_t ce_cmd;
-        /* CE modes, see GNI_CEMODE_* */
-        uint32_t ce_mode;
-        /* CE reduction ID */
-        uint64_t ce_red_id;
 } gni_post_descriptor_t;
 
 /* Chained Transaction Put descriptor */

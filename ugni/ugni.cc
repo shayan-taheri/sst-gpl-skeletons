@@ -65,22 +65,46 @@ class gni_message : public sumi::message {
 class gni_rdma_message : public gni_message {
  public:
   void get_completed(gni_post_descriptor_t** descr){
-    if (pd_ == nullptr){
-      sprockit::abort("calling get completed twice on the same cq_entry");
-    }
-    *descr = pd_;
-    pd_ = nullptr;
+    gni_post_descriptor* pd = new gni_post_descriptor;
+    pd->first_operand = first_op_;
+    pd->second_operand = second_op_;
+    pd->cqwrite_value = cqwrite_val_;
+    pd->local_addr = (uint64_t) local_buffer().ptr;
+    pd->remote_addr = (uint64_t) remote_buffer().ptr;
+    pd->length = byte_length();
+    *descr = pd;
   }
 
-  ~gni_rdma_message(){
-    if (pd_) delete pd_;
+  ~gni_rdma_message(){}
+
+  void set_first_operand(uint64_t op){
+    first_op_ = op;
+  }
+
+  void set_second_operand(uint64_t op){
+    second_op_ = op;
+  }
+
+  void set_cqwrite(uint64_t val){
+    cqwrite_val_ = val;
   }
 
  private:
-  gni_post_descriptor_t* pd_;
+  uint64_t first_op_;
+  uint64_t second_op_;
+  uint64_t cqwrite_val_;
 };
 
 class gni_smsg_message : public gni_message {
+ public:
+  void set_tag(int tag){
+    tag_ = tag;
+  }
+
+  int tag() const {
+    return tag_;
+  }
+
  private:
   int tag_;
 };
@@ -514,7 +538,7 @@ extern "C" gni_return_t GNI_MemRegister(
   uint32_t          flags,
   uint32_t          vmdh_index,
   gni_mem_handle_t  *mem_hndl) {
-  spkt_abort_printf("unimplemented: GNI_MemRegister()");
+  mem_hndl->cq_handle = dst_cq_hndl;
   return GNI_RC_SUCCESS;
 }
 
@@ -526,7 +550,7 @@ extern "C" gni_return_t GNI_MemRegisterSegments(
   uint32_t          flags,
   uint32_t          vmdh_index,
   gni_mem_handle_t  *mem_hndl) {
-  spkt_abort_printf("unimplemented: GNI_MemRegisterSegments()");
+  mem_hndl->cq_handle = dst_cq_hndl;
   return GNI_RC_SUCCESS;
 }
 
@@ -540,7 +564,6 @@ extern "C" gni_return_t GNI_SetMddResources(
 extern "C" gni_return_t GNI_MemDeregister(
   gni_nic_handle_t     nic_hndl,
   gni_mem_handle_t     *mem_hndl) {
-  spkt_abort_printf("unimplemented: GNI_MemDeregister()");
   return GNI_RC_SUCCESS;
 }
 
@@ -578,27 +601,83 @@ extern "C" gni_return_t GNI_CqCreate(
   void                (*handler)(gni_cq_entry_t *,void *),
   void                *context,
   gni_cq_handle_t     *cq_hndl) {
-  spkt_abort_printf("unimplemented: GNI_CqCreate()");
+  if (context || handler){
+    spkt_abort_printf("cannot create completion queue with callback function");
+  }
+  *cq_hndl = sstmac_ugni()->allocate_cq();
   return GNI_RC_SUCCESS;
 }
 
 extern "C" gni_return_t GNI_CqDestroy(
   gni_cq_handle_t      cq_hndl) {
-  spkt_abort_printf("unimplemented: GNI_CqDestroy()");
   return GNI_RC_SUCCESS;
 }
 
 extern "C" gni_return_t GNI_PostRdma(
   gni_ep_handle_t              ep_hndl,
   gni_post_descriptor_t        *post_descr) {
-  spkt_abort_printf("unimplemented: GNI_PostRdma()");
+  gni_rdma_message* msg = new gni_rdma_message;
+  ugni_transport* api = sstmac_ugni();
+  msg->set_byte_length(post_descr->length);
+  msg->set_first_operand(post_descr->first_operand);
+  msg->set_second_operand(post_descr->second_operand);
+  msg->set_cqwrite(post_descr->cqwrite_value);
+  msg->remote_buffer().ptr = (void*) post_descr->remote_addr;
+  msg->local_buffer().ptr = (void*) post_descr->local_addr;
+  gni_cq_handle_t src_cq = post_descr->src_cq_hndl
+      ? post_descr->src_cq_hndl
+      : post_descr->local_mem_hndl.cq_handle;
+  if (post_descr->type == GNI_POST_RDMA_GET){
+    bool recv_ack = (post_descr->cq_mode | GNI_CQMODE_GLOBAL_EVENT)
+                    || (post_descr->cq_mode | GNI_CQMODE_LOCAL_EVENT);
+    bool send_ack = post_descr->cq_mode | GNI_CQMODE_REMOTE_EVENT;
+    api->rdma_get(ep_hndl->ep_id, msg,
+                  send_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::message::no_ack,
+                  recv_ack ? src_cq : sumi::message::no_ack);
+  } else if (post_descr->type == GNI_POST_RDMA_PUT){
+    bool send_ack = (post_descr->cq_mode | GNI_CQMODE_GLOBAL_EVENT)
+                    || (post_descr->cq_mode | GNI_CQMODE_LOCAL_EVENT);
+    bool recv_ack = post_descr->cq_mode | GNI_CQMODE_REMOTE_EVENT;
+    api->rdma_get(ep_hndl->ep_id, msg,
+                  send_ack ? src_cq : sumi::message::no_ack,
+                  recv_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::message::no_ack);
+  } else {
+    return GNI_RC_INVALID_PARAM;
+  }
   return GNI_RC_SUCCESS;
 }
 
 extern "C" gni_return_t GNI_PostFma(
   gni_ep_handle_t              ep_hndl,
   gni_post_descriptor_t        *post_descr) {
-  spkt_abort_printf("unimplemented: GNI_PostFma()");
+  gni_rdma_message* msg = new gni_rdma_message;
+  ugni_transport* api = sstmac_ugni();
+  msg->set_byte_length(post_descr->length);
+  msg->set_first_operand(post_descr->first_operand);
+  msg->set_second_operand(post_descr->second_operand);
+  msg->set_cqwrite(post_descr->cqwrite_value);
+  msg->remote_buffer().ptr = (void*) post_descr->remote_addr;
+  msg->local_buffer().ptr = (void*) post_descr->local_addr;
+  gni_cq_handle_t src_cq = post_descr->src_cq_hndl
+      ? post_descr->src_cq_hndl
+      : post_descr->local_mem_hndl.cq_handle;
+  if (post_descr->type == GNI_POST_FMA_GET){
+    bool recv_ack = (post_descr->cq_mode | GNI_CQMODE_GLOBAL_EVENT)
+                    || (post_descr->cq_mode | GNI_CQMODE_LOCAL_EVENT);
+    bool send_ack = post_descr->cq_mode | GNI_CQMODE_REMOTE_EVENT;
+    api->rdma_get(ep_hndl->ep_id, msg,
+                  send_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::message::no_ack,
+                  recv_ack ? src_cq : sumi::message::no_ack);
+  } else if (post_descr->type == GNI_POST_FMA_PUT){
+    bool send_ack = (post_descr->cq_mode | GNI_CQMODE_GLOBAL_EVENT)
+                    || (post_descr->cq_mode | GNI_CQMODE_LOCAL_EVENT);
+    bool recv_ack = post_descr->cq_mode | GNI_CQMODE_REMOTE_EVENT;
+    api->rdma_put(ep_hndl->ep_id, msg,
+                  send_ack ? src_cq : sumi::message::no_ack,
+                  recv_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::message::no_ack);
+  } else {
+    return GNI_RC_INVALID_PARAM;
+  }
   return GNI_RC_SUCCESS;
 }
 
@@ -686,7 +765,9 @@ extern "C" gni_return_t GNI_CqErrorRecoverable(
 extern "C" gni_return_t GNI_SmsgBufferSizeNeeded(
   gni_smsg_attr_t     *smsg_attr,
   unsigned int        *size) {
-  spkt_abort_printf("unimplemented: GNI_SmsgBufferSizeNeeded()");
+  //don't do anything interesting with this
+  //don't actually allocate any buffers
+  *size = 8;
   return GNI_RC_SUCCESS;
 }
 
@@ -694,14 +775,13 @@ extern "C" gni_return_t GNI_SmsgInit(
   gni_ep_handle_t      ep_hndl,
   gni_smsg_attr_t      *local_smsg_attr,
   gni_smsg_attr_t      *remote_smsg_attr) {
-  spkt_abort_printf("unimplemented: GNI_SmsgInit()");
   return GNI_RC_SUCCESS;
 }
 
 extern "C" gni_return_t GNI_SmsgSetDeliveryMode(
   gni_nic_handle_t	nic_handle,
   uint16_t 		dlvr_mode) {
-  spkt_abort_printf("unimplemented: GNI_SmsgSetDeliveryMode()");
+  //no-op for now
   return GNI_RC_SUCCESS;
 }
 
@@ -712,8 +792,7 @@ extern "C" gni_return_t GNI_SmsgSend(
   void                 *data,
   uint32_t             data_length,
   uint32_t             msg_id) {
-  spkt_abort_printf("unimplemented: GNI_SmsgSend()");
-  return GNI_RC_SUCCESS;
+  return GNI_SmsgSendWTag(ep_hndl, header, header_length, data, data_length, msg_id, -1);
 }
 
 extern "C" gni_return_t GNI_SmsgSendWTag(
@@ -724,7 +803,19 @@ extern "C" gni_return_t GNI_SmsgSendWTag(
   uint32_t             data_length,
   uint32_t             msg_id,
   uint8_t              tag) {
-  spkt_abort_printf("unimplemented: GNI_SmsgSendWTag()");
+  gni_smsg_message* msg = new gni_smsg_message;
+  msg->set_byte_length(data_length + header_length);
+  msg->set_tag(tag);
+  if (header || data){
+    char* data_buf = new char[header_length + data_length];
+    if (header) ::memcpy(data_buf, header, header_length);
+    if (data) ::memcpy(data_buf + header_length, data, data_length);
+    msg->local_buffer().ptr = data_buf;
+  }
+  msg->set_msg_id(msg_id);
+  ugni_transport* api = sstmac_ugni();
+  api->smsg_send(ep_hndl->ep_id, sumi::message::eager_payload, msg,
+                 sumi::message::no_ack, ep_hndl->cq_id);
   return GNI_RC_SUCCESS;
 }
 
