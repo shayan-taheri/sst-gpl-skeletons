@@ -1,4 +1,5 @@
 #include "gni_pub.h"
+#include "pmi.h"
 #include <sprockit/errors.h>
 #include <sumi/message.h>
 #include <sumi/transport.h>
@@ -119,6 +120,15 @@ class ugni_transport : public sstmac::sumi_transport
     sstmac::sumi_transport(params, sid, os),
     pending_smsg_(4) //leave room for 4 cq for now, this can grow
   {
+  }
+
+  void init() override {
+    sstmac::sumi_transport::init();
+    //these are not ever used, but are needed for faking out real implementations
+    setenv("PMI_GNI_LOC_ADDR", "0", 0);
+    setenv("PMI_GNI_PTAG", "0", 0);
+    setenv("PMI_GNI_COOKIE", "0", 0);
+    setenv("PMI_GNI_DEV_ID", "0", 0);
   }
 
   int allocate_cq(){
@@ -1263,4 +1273,41 @@ extern "C" gni_return_t GNI_ConfigureJobFd(
   int                 *nic_fd) {
   spkt_abort_printf("unimplemented: GNI_ConfigureJobFd()");
   return GNI_RC_SUCCESS;
+}
+
+extern "C" int PMI_Init()
+{
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Finalize()
+{
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Get_rank(int *ret)
+{
+  *ret = sstmac_ugni()->rank();
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Get_size(int* ret)
+{
+  *ret = sstmac_ugni()->nproc();
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Allgather(void *in, void *out, int len)
+{
+  //for now, I know that any data from this will be completely ignored
+  //so don't bother doing it
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Barrier()
+{
+  auto api = sstmac_ugni();
+  api->barrier(42);
+  api->collective_block(sumi::collective::barrier, 42);
+  return PMI_SUCCESS;
 }

@@ -8,7 +8,7 @@ CC :=     libsstcc
 CXXFLAGS := -fPIC
 CPPFLAGS := -I. -I$(HOME)/Programs/install/sst-core/clang/include
 LIBDIR :=  
-PREFIX := 
+PREFIX := $(shell $(CXX) --prefix)
 LDFLAGS :=  -Wl,-rpath,$(PREFIX)/lib
 
 OBJ := $(SRC:.cc=.o) 
@@ -31,6 +31,8 @@ $(TARGET): $(OBJ)
 clean: 
 	rm -f $(TARGET) $(OBJ) 
 
-install: $(TARGET)
-	cp $< $(PREFIX)/bin
+install: $(TARGET) gni_pub.h pmi.h
+	cp $< $(PREFIX)/lib
+	cp gni_pub.h $(PREFIX)/include
+	cp pmi.h $(PREFIX)/include
 
