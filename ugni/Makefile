@@ -1,8 +1,9 @@
-TARGET := libugni.so
-SRC := ugni.cc
+TARGETS := libugni.la libibverbs.la
+SRC := ugni.cc fakeverbs.cc
 
 #CXX :=    g++
 #CC :=     gcc
+LIBTOOL = glibtool
 CXX :=    libsst++
 CC :=     libsstcc
 CXXFLAGS := -fPIC
@@ -11,28 +12,26 @@ LIBDIR :=
 PREFIX := $(shell $(CXX) --prefix)
 LDFLAGS :=  -Wl,-rpath,$(PREFIX)/lib
 
-OBJ := $(SRC:.cc=.o) 
-OBJ := $(OBJ:.cpp=.o)
-OBJ := $(OBJ:.c=.o)
-
 .PHONY: clean install 
 
-all: $(TARGET)
+%.la: %.lo 
+	$(LIBTOOL) --mode=link --tag=CXX $(CXX) -o $@ $+ $(LDFLAGS) $(LIBS) $(CXXFLAGS) -rpath $(PREFIX)/lib
 
-$(TARGET): $(OBJ) 
-	$(CXX) -shared -o $@ $+ $(LDFLAGS) $(LIBS)  $(CXXFLAGS)
+%.lo: %.cc 
+	$(LIBTOOL) --mode=compile --tag=CXX $(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
 
-%.o: %.cc 
-	$(CXX) $(CPPFLAGS) $(CXXFLAGS) -c $< -o $@
+%.cc: 
 
-%.o: %.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) -c $< -o $@
+all: $(TARGETS)
 
 clean: 
-	rm -f $(TARGET) $(OBJ) 
+	rm -rf $(TARGETS) *.o *.lo .libs
 
-install: $(TARGET) gni_pub.h pmi.h
-	cp $< $(PREFIX)/lib
+install: $(TARGETS) gni_pub.h pmi.h
+	$(LIBTOOL) --mode=install /usr/bin/install -c libugni.la $(PREFIX)/lib
+	$(LIBTOOL) --mode=install /usr/bin/install -c libibverbs.la $(PREFIX)/lib
+	-mkdir -p $(PREFIX)/include/infiniband
+	cp verbs.h $(PREFIX)/include/infiniband
 	cp gni_pub.h $(PREFIX)/include
 	cp pmi.h $(PREFIX)/include
 
