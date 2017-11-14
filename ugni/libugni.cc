@@ -112,7 +112,7 @@ class gni_smsg_message : public gni_message {
 
 class ugni_transport : public sstmac::sumi_transport
 {
-  RegisterAPI("mpi", ugni_transport)
+  RegisterAPI("ugni", ugni_transport)
  public:
   ugni_transport(sprockit::sim_parameters* params,
                  sstmac::sw::software_id sid,
@@ -164,6 +164,11 @@ ugni_transport* sstmac_ugni()
 {
   sstmac::sw::thread* t = sstmac::sw::operating_system::current_thread();
   return t->get_api<ugni_transport>();
+}
+
+sumi::transport* active_transport()
+{
+  return sstmac_ugni(); 
 }
 
 extern "C" gni_return_t
@@ -1311,3 +1316,11 @@ extern "C" int PMI_Barrier()
   api->collective_block(sumi::collective::barrier, 42);
   return PMI_SUCCESS;
 }
+
+extern "C" int 
+PMI_Get_numpes_on_smp(int* num)
+{
+  *num = 1; //for now
+  return PMI_SUCCESS;
+}
+

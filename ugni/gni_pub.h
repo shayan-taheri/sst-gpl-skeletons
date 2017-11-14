@@ -803,6 +803,7 @@ typedef struct gni_post_descriptor {
         /****************** CQWrite specific *****************/
         /* cqwrite value - only 6 least significant bytes available to software */
         uint64_t cqwrite_value;
+        uint64_t             post_id;
 } gni_post_descriptor_t;
 
 /* Chained Transaction Put descriptor */

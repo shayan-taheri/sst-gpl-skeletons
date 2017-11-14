@@ -21,9 +21,13 @@ int PMI_Init();
 
 int PMI_Finalize();
 
+
+
+
 #ifdef __cplusplus
 }
 #endif
+
 
 
 #endif // PMI_H
