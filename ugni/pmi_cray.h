@@ -24,6 +24,8 @@ int PMI2_Job_GetId(char jobid[], int jobid_size);
 
 int PMI2_Init(int *spawned, int *size, int *rank, int *appnum);
 
+int PMI_Get_nidlist_ptr(void** nidlist);
+
 #ifdef __cplusplus
 }
 #endif

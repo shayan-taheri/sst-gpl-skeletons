@@ -103,4 +103,17 @@ PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
   return PMI_SUCCESS;
 }
 
+extern "C" int
+PMI2_Finalize()
+{
+ return PMI_SUCCESS;
+}
+
+extern "C" int 
+PMI_Get_nidlist_ptr(void** nidlist)
+{
+  *nidlist = active_transport()->nidlist();
+  return PMI_SUCCESS;
+}
+
 
