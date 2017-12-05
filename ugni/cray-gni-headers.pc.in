@@ -1,0 +1,8 @@
+includedir=replInc
+
+Cflags: -I${includedir}
+Description: Cray Gemini Network Interface
+Libs:
+Name: cray-gni-headers
+Version: 5.0.11
+
