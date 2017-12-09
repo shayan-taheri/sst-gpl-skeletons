@@ -42,6 +42,8 @@ install: $(TARGETS) $(HEADERS)
 	-mkdir -p $(PREFIX)/pkgconfig
 	sed -e 's/replInc/$(SED_PREFIX)\/include/g' cray-ugni.pc.in | sed -e 's/replLib/$(SED_PREFIX)\/lib/g' > cray-ugni.pc
 	sed -e 's/replInc/$(SED_PREFIX)\/include/g' cray-gni-headers.pc.in > cray-gni-headers.pc
+	sed -e 's/replDir/$(SED_PREFIX)\/pkgconfig/g' env.sh.in > env.sh
+	cp env.sh $(PREFIX)/pkgconfig
 	cp cray-ugni.pc $(PREFIX)/pkgconfig
 	cp cray-gni-headers.pc $(PREFIX)/pkgconfig
 	cp verbs.h $(PREFIX)/include/infiniband

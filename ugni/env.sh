@@ -1,2 +1,0 @@
-#export CRAYPE_NETWORK_TARGET=gemini
-export CRAYPE_NETWORK_TARGET=aries
