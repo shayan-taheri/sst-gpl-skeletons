@@ -334,6 +334,56 @@ GNI_CdmCreate(uint32_t inst_id, uint8_t ptag, uint32_t cookie,
   return GNI_RC_SUCCESS;
 }
 
+extern "C" gni_return_t GNI_EpBind(
+  gni_ep_handle_t      ep_hndl,
+  uint32_t             remote_addr,
+  uint32_t             remote_id)
+{
+  return GNI_RC_SUCCESS;
+}
+
+extern "C" gni_return_t GNI_EpUnbind(
+  gni_ep_handle_t      ep_hndl)
+{
+  return GNI_RC_SUCCESS;
+}
+
+extern "C" gni_return_t GNI_EpIdle(gni_ep_handle_t ep_hndl)
+{
+  return GNI_RC_SUCCESS; //no op
+}
+
+extern "C" gni_return_t GNI_CdmHold(
+  uint8_t ptag,
+  uint32_t cookie,
+  int *nic_fd_ret)
+{
+  *nic_fd_ret = 0; //basically a no-op
+  return GNI_RC_SUCCESS;
+}
+
+extern "C" gni_return_t
+GNI_CdmRelease(int nic_fd){
+  return GNI_RC_SUCCESS;
+} //no-op
+
+
+extern "C" gni_return_t GNI_CdmAttach(
+  gni_cdm_handle_t    cdm_hndl,
+  uint32_t            device_id,
+  uint32_t            *local_addr,
+  gni_nic_handle_t    *nic_hndl)
+{
+ //no-op, nic handles do nothing in SST
+  return GNI_RC_SUCCESS;
+}
+
+extern "C" gni_return_t
+GNI_CdmDestroy(gni_cdm_handle_t cdm_hndl)
+{
+  return GNI_RC_SUCCESS;
+}
+
 extern "C" gni_return_t
 GNI_CdmGetNicAddress(uint32_t device_id, uint32_t* address, uint32_t* cpu_id){
   *cpu_id = 0;
@@ -1079,7 +1129,7 @@ extern "C" gni_return_t GNI_GetVersionInformation(
 
 extern "C" gni_return_t GNI_GetDeviceType(
   gni_nic_device_t    *dev_type) {
-  spkt_abort_printf("unimplemented: GNI_GetDeviceType()");
+  *dev_type = GNI_DEVICE_GEMINI;
   return GNI_RC_SUCCESS;
 }
 
@@ -1135,6 +1185,17 @@ extern "C" gni_return_t GNI_CeGetId(
   gni_ce_handle_t     ce_hndl,
   uint32_t            *ce_id) {
   spkt_abort_printf("unimplemented: GNI_CeGetId()");
+  return GNI_RC_SUCCESS;
+}
+
+extern "C" gni_return_t GNI_EpSetEventData(
+  gni_ep_handle_t      ep_hndl,
+  uint32_t             local_event,
+  uint32_t             remote_event)
+{
+  gni_ep_t* ep = ep_hndl;
+  ep->local_event = local_event;
+  ep->remote_event = remote_event;
   return GNI_RC_SUCCESS;
 }
 
@@ -1282,11 +1343,13 @@ extern "C" gni_return_t GNI_ConfigureJobFd(
 
 extern "C" int PMI_Init()
 {
+  sstmac_ugni()->init();
   return PMI_SUCCESS;
 }
 
 extern "C" int PMI_Finalize()
 {
+  sstmac_ugni()->finish();
   return PMI_SUCCESS;
 }
 
@@ -1304,6 +1367,10 @@ extern "C" int PMI_Get_size(int* ret)
 
 extern "C" int PMI_Allgather(void *in, void *out, int len)
 {
+  auto tport = sstmac_ugni();
+  int init_tag = 42;
+  tport->allgather(out, in, len, 1, init_tag);
+  tport->collective_block(sumi::collective::allgather, init_tag);
   //for now, I know that any data from this will be completely ignored
   //so don't bother doing it
   return PMI_SUCCESS;

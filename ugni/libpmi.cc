@@ -96,6 +96,7 @@ extern "C" int
 PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
 {
   auto api = active_transport();
+  api->init();
   *size = api->nproc();
   *rank = api->rank();
   *appnum = 0; //for now, we can't do multiple mpiexec launch
@@ -106,7 +107,9 @@ PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
 extern "C" int
 PMI2_Finalize()
 {
- return PMI_SUCCESS;
+  auto api = active_transport();
+  api->finish();
+  return PMI_SUCCESS;
 }
 
 extern "C" int 

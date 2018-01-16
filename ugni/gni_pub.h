@@ -1245,10 +1245,8 @@ gni_return_t
  * between the calling process and the NIC devices that were established via
  * the corresponding Attach function.
  **/
-inline gni_return_t
-GNI_CdmDestroy(IN gni_cdm_handle_t     cdm_hndl){
-  return GNI_RC_SUCCESS;
-} //no-op for now
+gni_return_t
+GNI_CdmDestroy(IN gni_cdm_handle_t     cdm_hndl);
 
 /**
  * GNI_CdmHold - Hold Communication Domain
@@ -1272,14 +1270,11 @@ GNI_CdmDestroy(IN gni_cdm_handle_t     cdm_hndl){
  * This function creates an instance of the file descriptor for the NIC.
  **/
 
-inline gni_return_t
+gni_return_t
 GNI_CdmHold(
   IN uint8_t ptag,
   IN uint32_t cookie,
-  OUT int *nic_fd_ret){
-  *nic_fd_ret = 0; //basically a no-op
-  return GNI_RC_SUCCESS;
-}
+  OUT int *nic_fd_ret);
 
 /**
  * GNI_CdmRelease - Release Communication Domain
@@ -1296,10 +1291,8 @@ GNI_CdmHold(
  * This function closes/releases an instance of the file descriptor for the NIC.
  **/
 
-inline gni_return_t
-GNI_CdmRelease(IN int nic_fd){
-  return GNI_RC_SUCCESS;
-} //no-op
+gni_return_t
+GNI_CdmRelease(IN int nic_fd);
 
 /**
  * GNI_CdmGetNicAddress - Get the PE address of a GNI device.
@@ -1362,14 +1355,11 @@ gni_return_t
  * to attach the same CDM instance to the same Gemini NIC more than once,
  * but it is allowed to attach multiple CDMs to the same Gemini NIC.
  **/
-inline gni_return_t GNI_CdmAttach(
+gni_return_t GNI_CdmAttach(
   IN  gni_cdm_handle_t    cdm_hndl,
   IN  uint32_t            device_id,
   OUT uint32_t            *local_addr,
-  OUT gni_nic_handle_t    *nic_hndl){
- //no-op, nic handles do nothing in SST
-  return GNI_RC_SUCCESS;
-}
+  OUT gni_nic_handle_t    *nic_hndl);
 
 /**
  * GNI_SuspendJob - Suspend GNI resources belonging to a job
@@ -1651,15 +1641,10 @@ gni_return_t GNI_EpCreate(
  * and EP remote_id when generating LOCAL CQ events.
  * This function allows to re-assign these events to the user defined values.
  **/ 
-inline gni_return_t GNI_EpSetEventData(
+gni_return_t GNI_EpSetEventData(
   IN gni_ep_handle_t      ep_hndl,
   IN uint32_t             local_event,
-  IN uint32_t             remote_event){
-  gni_ep_t* ep = ep_hndl;
-  ep->local_event = local_event;
-  ep->remote_event = remote_event;
-  return GNI_RC_SUCCESS;
-}
+  IN uint32_t             remote_event);
 
 /**
  * GNI_EpBind - Bind logical Endpoint to a peer
@@ -1683,13 +1668,10 @@ inline gni_return_t GNI_EpSetEventData(
  * and remote instance in the Communication Domain.
  * Once bound the Endpoint can be used to post RDMA and FMA transactions.
  **/
-inline gni_return_t GNI_EpBind(
+gni_return_t GNI_EpBind(
   IN gni_ep_handle_t      ep_hndl,
   IN uint32_t             remote_addr,
-  IN uint32_t             remote_id){
-  //no-op for now
-  return GNI_RC_SUCCESS;
-}
+  IN uint32_t             remote_id);
 
 /**
  * GNI_EpUnbind - Unbind logical Endpoint
@@ -1711,10 +1693,8 @@ inline gni_return_t GNI_EpBind(
  * An Endpoint cannot be used to post RDMA, FMA transactions or
  * send short messages while it is in non-bound state.
  **/
-inline gni_return_t GNI_EpUnbind(
-  IN gni_ep_handle_t      ep_hndl){
-  return GNI_RC_SUCCESS;
-}
+gni_return_t GNI_EpUnbind(
+  IN gni_ep_handle_t      ep_hndl);
 
 /**
  * GNI_EpIdle - test if EP has outstanding transactions
@@ -1732,9 +1712,7 @@ inline gni_return_t GNI_EpUnbind(
  * This will perform a subset of what is done in GNI_EpUnbind to inspect if
  * the GNI endpoint is idle.  This function will not destroy any resources.
  **/
-inline gni_return_t GNI_EpIdle(IN gni_ep_handle_t ep_hndl){
-  return GNI_RC_SUCCESS; //no op
-}
+gni_return_t GNI_EpIdle(IN gni_ep_handle_t ep_hndl);
 
 /**
  * GNI_EpDestroy - Destroy logical Endpoint
