@@ -8,20 +8,16 @@
 #include <sstmac/software/process/thread.h>
 #include <sstmac/libraries/sumi/sumi_transport.h>
 
+MakeDebugSlot(pmi)
+
+#define debug(tport, ...) \
+  debug_printf(sprockit::dbg::pmi, "PMI Rank %d: %s", tport->rank(), \
+    sprockit::printf(__VA_ARGS__).c_str())
+
 extern sumi::transport* active_transport();
 
 static sstmac::sw::app* current_app(){
   return sstmac::sw::operating_system::current_thread()->parent_app();
-}
-
-extern "C" int PMI_Init()
-{
-  return PMI_SUCCESS;
-}
-
-extern "C" int PMI_Finalize()
-{
-  return PMI_SUCCESS;
 }
 
 extern "C" int PMI_Get_rank(int *ret)
@@ -33,29 +29,6 @@ extern "C" int PMI_Get_rank(int *ret)
 extern "C" int PMI_Get_size(int* ret)
 {
   *ret = active_transport()->nproc();
-  return PMI_SUCCESS;
-}
-
-extern "C" int PMI_Allgather(void *in, void *out, int len)
-{
-  //for now, I know that any data from this will be completely ignored
-  //so don't bother doing it
-  return PMI_SUCCESS;
-}
-
-
-extern "C" int PMI_Barrier()
-{
-  auto api = active_transport();
-  api->barrier(42);
-  api->collective_block(sumi::collective::barrier, 42);
-  return PMI_SUCCESS;
-}
-
-extern "C" int 
-PMI_Get_numpes_on_smp(int* num)
-{
-  *num = 1; //for now
   return PMI_SUCCESS;
 }
 
@@ -97,6 +70,7 @@ PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
 {
   auto api = active_transport();
   api->init();
+  debug(api, "PMI2_Init()");
   *size = api->nproc();
   *rank = api->rank();
   *appnum = 0; //for now, we can't do multiple mpiexec launch
@@ -108,6 +82,7 @@ extern "C" int
 PMI2_Finalize()
 {
   auto api = active_transport();
+  debug(api, "PMI2_Finalize()");
   api->finish();
   return PMI_SUCCESS;
 }
@@ -119,4 +94,44 @@ PMI_Get_nidlist_ptr(void** nidlist)
   return PMI_SUCCESS;
 }
 
+extern "C" int PMI_Init()
+{
+  active_transport()->init();
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Finalize()
+{
+  active_transport()->finish();
+  return PMI_SUCCESS;
+}
+
+
+extern "C" int PMI_Allgather(void *in, void *out, int len)
+{
+  auto tport = active_transport();
+  debug(tport, "PMI_Allgather()");
+  int init_tag = 42;
+  tport->allgather(out, in, len, 1, init_tag);
+  tport->collective_block(sumi::collective::allgather, init_tag);
+  //for now, I know that any data from this will be completely ignored
+  //so don't bother doing it
+  return PMI_SUCCESS;
+}
+
+extern "C" int PMI_Barrier()
+{
+  auto api = active_transport();
+  debug(api, "PMI_Barrier()");
+  api->barrier(42);
+  api->collective_block(sumi::collective::barrier, 42);
+  return PMI_SUCCESS;
+}
+
+extern "C" int 
+PMI_Get_numpes_on_smp(int* num)
+{
+  *num = 1; //for now
+  return PMI_SUCCESS;
+}
 
