@@ -1,3 +1,4 @@
+#include <netdb.h>
 #include<rdma_cma.h>
 #include <sprockit/errors.h>
 #include <sumi/message.h>
@@ -9,11 +10,28 @@
 
 using namespace sstmac::sw;
 
+int getaddrinfo(const char *node, const char *service,
+                       const struct addrinfo *hints,
+                       struct addrinfo **res)
+{
+  int nid = (int) operating_system::current_node_id();
+
+  // hack so nodes 0/1 can connect
+  if (nid == 0) nid = 1;
+  else if (nid == 1) nid = 0;
+
+  (*res) = new addrinfo;
+  sockaddr_in* addr = new sockaddr_in;
+  addr->sin_addr.s_addr = nid;
+  (*res)->ai_addr = (sockaddr*) addr;
+  return 0;
+}
+
 class rdma_cm_message : public sumi::message {
  public:
   rdma_cm_message(rdma_cm_event_type tp): type_(tp) {}
   rdma_cm_event_type get_event_type() {return type_;}
- private:
+private:
   rdma_cm_event_type type_;
 };
 
@@ -30,6 +48,14 @@ class rdma_cm_transport : public sstmac::sumi_transport
 
   bool inited() {
     return inited_ ? true : false;
+  }
+
+  void get_event(struct rdma_event_channel *channel,
+                 struct rdma_cm_event **event) {
+    (*event) = new rdma_cm_event;
+    sumi::message *msg = blocking_poll(channel->fd);
+    rdma_cm_message *rmsg = dynamic_cast<rdma_cm_message*>(msg);
+    (*event)->event = rmsg->get_event_type();
   }
 
 //  void init() override {
@@ -113,7 +139,11 @@ int rdma_create_id(struct rdma_event_channel *channel,
 		   struct rdma_cm_id **id, void *context,
 		   enum rdma_port_space ps)
 {
-  spkt_abort_printf("unimplemented: rdma_create_id()");
+  // there's a whole bunch of stuff in the rdma_cm_id struct, but I'm not
+  // sure what in there we actually need to care about
+  (*id) = new rdma_cm_id;
+  (*id)->channel = channel;
+  return 0;
 }
 
 /**
@@ -223,7 +253,18 @@ int rdma_bind_addr(struct rdma_cm_id *id, struct sockaddr *addr)
 int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 		      struct sockaddr *dst_addr, int timeout_ms)
 {
-  spkt_abort_printf("unimplemented: rdma_resolve_addr()");
+  sockaddr_in* addr = (sockaddr_in*) dst_addr;
+  int node = addr->sin_addr.s_addr;
+
+  std::cerr << "dst is " << node << "\n";
+
+  // bind to an rdma device
+
+  rdma_cm_message* msg = new rdma_cm_message(RDMA_CM_EVENT_ADDR_RESOLVED);
+  rdma_cm_transport* api = sstmac_rdma_cm();
+  int me = api->rank();
+  api->smsg_send(me, sumi::message::software_ack, msg,
+                 sumi::message::no_ack, id->channel->fd);
 }
 
 /**
@@ -506,7 +547,10 @@ int rdma_leave_multicast(struct rdma_cm_id *id, struct sockaddr *addr)
 int rdma_get_cm_event(struct rdma_event_channel *channel,
 		      struct rdma_cm_event **event)
 {
-  spkt_abort_printf("unimplemented: rdma_get_cm_event()");
+  (*event) = new rdma_cm_event;
+  rdma_cm_transport* tp = sstmac_rdma_cm();
+  tp->get_event(channel, event);
+  return 0;
 }
 
 /**
