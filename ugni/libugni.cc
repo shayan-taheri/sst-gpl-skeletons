@@ -447,6 +447,7 @@ extern "C" gni_return_t GNI_EpBind(
 extern "C" gni_return_t GNI_EpUnbind(
   gni_ep_handle_t      ep_hndl)
 {
+  debug(sstmac_ugni(), "GNI_EpUnbind(ep=%d,...)", ep_hndl->ep_id);
   return GNI_RC_SUCCESS;
 }
 
@@ -806,6 +807,8 @@ extern "C" gni_return_t GNI_CqDestroy(
   gni_cq_handle_t      cq_hndl) {
   return GNI_RC_SUCCESS;
 }
+
+extern bool pmi_finalized;
 
 static gni_return_t post_rdma_op(
   gni_ep_handle_t              ep_hndl,

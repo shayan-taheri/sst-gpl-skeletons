@@ -78,9 +78,12 @@ PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
   return PMI_SUCCESS;
 }
 
+bool pmi_finalized = false;
+
 extern "C" int
 PMI2_Finalize()
 {
+  pmi_finalized = true;
   auto api = active_transport();
   debug(api, "PMI2_Finalize()");
   api->finish();
