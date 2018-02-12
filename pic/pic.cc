@@ -1,6 +1,16 @@
 #include <vector>
 #include <cstdlib>
 #include <mpi.h>
+#include <sprockit/keyword_registration.h>
+
+RegisterKeywords(
+ {"odx", "the level of intra-patch overdecomposition in X direction"},
+ {"ody", "the level of intra-patch overdecomposition in Y direction"},
+ {"odz", "the level of intra-patch overdecomposition in Z direction"},
+ {"unitx", "the stride of X units with uniform particle move characteristics" },
+ {"unity", "the stride of Y units with uniform particle move characteristics" },
+ {"unitz", "the stride of Z units with uniform particle move characteristics" }
+);
 
 struct Particle {
   double x[3];
@@ -9,6 +19,21 @@ struct Particle {
   double deltaT;
   int cell;
 };
+
+//0th incoming face is +X
+char incomingChars[] = { '+', '-' };
+//0th outgoing face is -X
+char outgoingChars[] = { '-', '+' };
+char faceChars[] = {'X', 'Y', 'Z' };
+
+#define inChar(x) incomingChars[x%2]
+#define outChar(x) outgoingChars[x%2]
+#define dimChar(x) faceChars[x/2]
+
+#define debug(...) //printf(__VA_ARGS__)
+
+#define SKEL_MAX_OD 4
+#define SKEL_NUM_FACES 6
 
 static const int send_size_tag = 100;
 static const int send_parts_tag = 101;
@@ -45,115 +70,282 @@ struct Patch {
   double center[3];
   double spacing;
   double deltaT;
+  int localGridDims[3];
+  int gridPosition[3];
 #pragma sst null_type sstmac::vector size resize 
   std::vector<Particle> local; 
+#pragma sst null_type sstmac::vector size resize push_back
+  std::vector<int> holes;
+#pragma sst null_type sstmac::vector size resize
   std::vector<Cell> cells;
   std::vector<Migration> outgoing;
   std::vector<Migration> incoming;
+
+  /** The extra variables for running the skeleton */
   int od[3]; //the od factor in each dim
-  int localGridDims[3];
-  double microIterScale[4][4][4];
-  double migrateFraction[4][4][4];
-  int boxOcc[4][4][4]; //allow for max 4x overdecomp in each dim
+  int uniformityFactory[3];
+  //What decrease fraction per micro-iteration in # particles moving
+  double microIterScale;
+  //What is current fraction of particles migrating
+  double migrateFraction;
+  int boxOcc[SKEL_MAX_OD][SKEL_MAX_OD][SKEL_MAX_OD]; //allow for max 4x overdecomp in each dim
 };
 
-void skeletonInitOutgoing(Patch& p){
-  for (int x=0; x < p.od[0]; x++){
-    for (int y=0; y < p.od[1]; y++){
-      for (int z=0; z < p.od[2]; z++){
-        p.migrateFraction[x][y][z] = p.microIterScale[x][y][z];
+static inline double getSkeletonFraction(int idx)
+{
+  return 0.04*((idx % 7)/7.) + 0.01;
+}
+
+void skeletonInitOutgoing(Patch& p)
+{
+  int myXidx = p.od[0]*p.gridPosition[0] / p.uniformityFactory[0];
+  int myYidx = p.od[1]*p.gridPosition[1] / p.uniformityFactory[1];
+  int myZidx = p.od[2]*p.gridPosition[2] / p.uniformityFactory[2];
+
+  double xInc = getSkeletonFraction(myXidx);
+  double yInc = getSkeletonFraction(myYidx);
+  double zInc = getSkeletonFraction(myZidx);
+
+  p.microIterScale = p.migrateFraction = (xInc + yInc + zInc);
+
+  debug("Rank %d set scale factor to %f\n", p.id, p.microIterScale);
+}
+
+
+
+void skeletonInitOverdecomposition(Patch& p, int ppc){
+
+  auto params = get_params();
+
+  p.od[0] = params->get_optional_int_param("odx", 1);
+  p.od[1] = params->get_optional_int_param("ody", 1);
+  p.od[2] = params->get_optional_int_param("odz", 1);
+  p.uniformityFactory[0] = params->get_optional_int_param("unitx", 1);
+  p.uniformityFactory[1] = params->get_optional_int_param("unity", 1);
+  p.uniformityFactory[2] = params->get_optional_int_param("unitz", 1);
+  int numOdBoxes = p.od[0] * p.od[1] * p.od[2];
+  int numPartsPerOdBox = (ppc*p.nCells) / numOdBoxes;
+  for (int x=0; x < p.od[0]; ++x){
+    for (int y=0; y < p.od[1]; ++y){
+      for (int z=0; z < p.od[2]; ++z){
+        p.boxOcc[x][y][z] = numPartsPerOdBox;
       }
     }
   }
 }
 
-int skeletonFillOutgoing(Patch& p){
-  int nbr = 0;
-  int numMoving = 0;
-  int totalMoving = 0;
-  for (int y=0; y < p.od[0]; ++y){
-    for (int z=0; z < p.od[2]; ++z){
-      //these go left on x=0
-      double frac = p.migrateFraction[0][y][z];
-      numMoving += frac * p.boxOcc[0][y][z];
-      p.migrateFraction[0][y][z] *= p.microIterScale[0][y][z];
+void skeletonPackMigrated(Patch& p){
+  int totalIncoming = 0;
+  { Migration& m = p.incoming[0];
+  if (m.parts.size() > 0){
+    //spread evenly across the boxes
+    int numIncomingPerBox = m.parts.size() / (p.od[1] * p.od[2]);
+    totalIncoming += m.parts.size();
+    for (int y=0; y < p.od[1]; ++y){
+      for (int z=0; z < p.od[2]; ++z){
+        p.boxOcc[0][y][z] += numIncomingPerBox;
+        debug("Rank %d box %d-%d-%d now at %d parts after its share of %d\n",
+               p.id,0,y,z,p.boxOcc[0][y][z],int(m.parts.size()));
+      }
     }
-  }
-  p.outgoing[nbr].parts.resize(numMoving);
-  totalMoving += numMoving;
+    m.parts.clear();
+  } }
 
-  ++nbr;
-  numMoving = 0;
-  int lastX = p.od[0] - 1;
-  for (int y=0; y < p.od[1]; ++y){
-    for (int z=0; z < p.localGridDims[2]; ++z){
-      //these go left on x=0
-      double frac = p.migrateFraction[lastX][y][z];
-      numMoving += frac * p.boxOcc[lastX][y][z];
-      p.migrateFraction[lastX][y][z] *= p.microIterScale[lastX][y][z];
+  { Migration& m = p.incoming[1];
+  if (m.parts.size() > 0){
+    //spread evenly across the boxes
+    int numIncomingPerBox = m.parts.size() / (p.od[1] * p.od[2]);
+    totalIncoming += m.parts.size();
+    int lastX = p.od[0] - 1;
+    for (int y=0; y < p.od[1]; ++y){
+      for (int z=0; z < p.od[2]; ++z){
+        p.boxOcc[lastX][y][z] += numIncomingPerBox;
+      }
     }
-  }
-  p.outgoing[nbr].parts.resize(numMoving);
-  totalMoving += numMoving;
+    m.parts.clear();
+  } }
 
-  ++nbr;
-  numMoving = 0;
-  for (int x=0; x < p.od[0]; ++x){
-    for (int z=0; z < p.od[2]; ++z){
-      //these go left on x=0
-      double frac = p.migrateFraction[x][0][z];
-      numMoving += frac * p.boxOcc[x][0][z];
-      p.migrateFraction[x][0][z] *= p.microIterScale[x][0][z];
+  { Migration& m = p.incoming[2];
+  if (m.parts.size() > 0){
+    //spread evenly across the boxes
+    int numIncomingPerBox = m.parts.size() / (p.od[0] * p.od[2]);
+    totalIncoming += m.parts.size();
+    for (int x=0; x < p.od[0]; ++x){
+      for (int z=0; z < p.od[2]; ++z){
+        p.boxOcc[x][0][z] += numIncomingPerBox;
+      }
     }
-  }
-  p.outgoing[nbr].parts.resize(numMoving);
-  totalMoving += numMoving;
+    m.parts.clear();
+  } }
 
-  ++nbr;
-  numMoving = 0;
-  int lastY = p.od[1] - 1;
-  for (int x=0; x < p.od[0]; ++x){
-    for (int z=0; z < p.od[2]; ++z){
-      //these go left on x=0
-      double frac = p.migrateFraction[x][lastY][z];
-      numMoving += frac * p.boxOcc[x][lastY][z];
-      p.migrateFraction[x][lastY][z] *= p.microIterScale[x][lastY][z];
+  { Migration& m = p.incoming[3];
+  if (m.parts.size() > 0){
+    //spread evenly across the boxes
+    int numIncomingPerBox = m.parts.size() / (p.od[0] * p.od[2]);
+    totalIncoming += m.parts.size();
+    int lastY = p.od[1] - 1;
+    for (int x=0; x < p.od[0]; ++x){
+      for (int z=0; z < p.od[2]; ++z){
+        p.boxOcc[x][lastY][z] += numIncomingPerBox;
+      }
     }
-  }
-  p.outgoing[nbr].parts.resize(numMoving);
-  totalMoving += numMoving;
+    m.parts.clear();
+  } }
 
-  ++nbr;
-  numMoving = 0;
+  { Migration& m = p.incoming[4];
+  if (m.parts.size() > 0){
+    //spread evenly across the boxes
+    int numIncomingPerBox = m.parts.size() / (p.od[0] * p.od[1]);
+    totalIncoming += m.parts.size();
+    for (int x=0; x < p.od[0]; ++x){
+      for (int y=0; y < p.od[1]; ++y){
+        p.boxOcc[x][y][0] += numIncomingPerBox;
+      }
+    }
+    m.parts.clear();
+  } }
+
+  { Migration& m = p.incoming[5];
+  if (m.parts.size() > 0){
+    //spread evenly across the boxes
+    int numIncomingPerBox = m.parts.size() / (p.od[0] * p.od[1]);
+    totalIncoming += m.parts.size();
+    int lastZ = p.od[2] - 1;
+    for (int x=0; x < p.od[0]; ++x){
+      for (int y=0; y < p.od[1]; ++y){
+        p.boxOcc[x][y][lastZ] += numIncomingPerBox;
+      }
+    }
+    m.parts.clear();
+  } }
+
+  size_t oldSize = p.local.size();
+  size_t newSize = oldSize + totalIncoming;
+  p.local.resize(newSize);
+
+  int boxSum = 0;
   for (int x=0; x < p.od[0]; ++x){
     for (int y=0; y < p.od[1]; ++y){
-      //these go left on x=0
-      double frac = p.migrateFraction[x][y][0];
-      numMoving += frac * p.boxOcc[x][y][0];
-      p.migrateFraction[x][y][0] *= p.microIterScale[x][y][0];
+      for (int z=0; z < p.od[2]; ++z){
+        boxSum += p.boxOcc[x][y][z];
+        debug("Rank %d box %d-%d-%d now at %d parts\n",
+               p.id,x,y,z,p.boxOcc[x][y][z]);
+      }
     }
   }
-  p.outgoing[nbr].parts.resize(numMoving);
-  totalMoving += numMoving;
+  debug("Rank %d sum over boxes is %d\n", p.id, boxSum);
+}
 
-  ++nbr;
-  numMoving = 0;
+
+int skeletonFillOutgoing(Patch& p){
+  int occIncrease[SKEL_MAX_OD][SKEL_MAX_OD][SKEL_MAX_OD];
+  int numMovingPerFace[SKEL_NUM_FACES];
+
+  ::memset(occIncrease, 0, sizeof(occIncrease));
+  ::memset(numMovingPerFace, 0, sizeof(numMovingPerFace));
+
+  int lastX = p.od[0] - 1;
+  int lastY = p.od[1] - 1;
   int lastZ = p.od[2] - 1;
   for (int x=0; x < p.od[0]; ++x){
-    for (int y=0; y < p.localGridDims[1]; ++y){
-      //these go left on x=0
-      double frac = p.migrateFraction[x][y][lastZ];
-      numMoving += frac * p.boxOcc[x][y][lastZ];
-      p.migrateFraction[x][y][lastZ] *= p.microIterScale[x][y][lastZ];
+    for (int y=0; y < p.od[1]; ++y){
+      for (int z=0; z < p.od[2]; ++z){
+        double frac = p.migrateFraction;
+        int boxMoves = frac * p.boxOcc[x][y][z];
+        if (x==0 && x == lastX){
+          numMovingPerFace[0] += boxMoves;
+          numMovingPerFace[1] += boxMoves;
+        } else if (x == 0) {
+          numMovingPerFace[0] += boxMoves;
+          occIncrease[x+1][y][z] += boxMoves;
+        } else if (x == lastX) {
+          numMovingPerFace[1] += boxMoves;
+          occIncrease[x-1][y][z] += boxMoves;
+        } else {
+          occIncrease[x+1][y][z] += boxMoves;
+          occIncrease[x-1][y][z] += boxMoves;
+        }
+
+        if (y==0 && y == lastY){
+          numMovingPerFace[2] += boxMoves;
+          numMovingPerFace[3] += boxMoves;
+        } else if (y == 0) {
+          numMovingPerFace[2] += boxMoves;
+          occIncrease[x][y+1][z] += boxMoves;
+        } else if (y == lastY) {
+          numMovingPerFace[3] += boxMoves;
+          occIncrease[x][y-1][z] += boxMoves;
+        } else {
+          occIncrease[x][y+1][z] += boxMoves;
+          occIncrease[x][y-1][z] += boxMoves;
+        }
+
+        if (z==0 && z == lastZ){
+          numMovingPerFace[4] += boxMoves;
+          numMovingPerFace[5] += boxMoves;
+        } else if (z == 0) {
+          numMovingPerFace[4] += boxMoves;
+          occIncrease[x][y][z+1] += boxMoves;
+        } else if (z == lastZ) {
+          numMovingPerFace[5] += boxMoves;
+          occIncrease[x][y][z-1] += boxMoves;
+        } else {
+          occIncrease[x][y][z+1] += boxMoves;
+          occIncrease[x][y][z-1] += boxMoves;
+        }
+        //we lose some out each face
+        p.boxOcc[x][y][z] -= 6*boxMoves;
+      }
     }
   }
-  p.outgoing[nbr].parts.resize(numMoving);
-  totalMoving += numMoving;
+
+  p.migrateFraction *= p.microIterScale;
+
+  int totalLocalOcc = 0;
+  for (int x=0; x < p.od[0]; ++x){
+    for (int y=0; y < p.od[1]; ++y){
+      for (int z=0; z < p.od[2]; ++z){
+        int oldOcc = p.boxOcc[x][y][z];
+        p.boxOcc[x][y][z] += occIncrease[x][y][z];
+        debug("Rank %d box %d-%d-%d depleted to %d, but back up to %d\n",
+               p.id, x,y,z, oldOcc, p.boxOcc[x][y][z]);
+        totalLocalOcc += p.boxOcc[x][y][z];
+      }
+    }
+  }
+
+  int totalMoving = 0;
+  for (int i=0; i < SKEL_NUM_FACES; ++i){
+    debug("Rank %d produced %d outgoing on face %c%c\n",
+           p.id, numMovingPerFace[i], outChar(i), dimChar(i));
+    p.outgoing[i].parts.resize(numMovingPerFace[i]);
+    totalMoving += numMovingPerFace[i];
+  }
+
+  debug("Total is %d + %d = %d -> %d per\n",
+         totalLocalOcc, totalMoving, totalLocalOcc + totalMoving,
+         (totalLocalOcc + totalMoving) / (p.od[0]*p.od[1]*p.od[2]));
+
+  int newSize = p.local.size() - totalMoving;
+  if (totalMoving > int(p.local.size())){
+    std::cerr << "more particles=" << totalMoving
+              << " moving than exist=" << int(p.local.size())
+              << std::endl;
+    abort();
+  }
+  p.local.resize(newSize);
 
   return totalMoving;
 }
 
-void moveParticle(Particle& part, Patch& patch)
+void backfill(Patch& patch)
+{
+  //stub - to be filled in
+}
+
+//this is never actually usable
+#pragma sst delete
+void moveParticle(int idx, Particle& part, Patch& patch)
 {
 #pragma sst loop_count 2
   while (part.deltaT > 0){
@@ -185,95 +377,118 @@ void moveParticle(Particle& part, Patch& patch)
     part.cell = dstFace.dstCell;
     if (dstFace.dstRank >= 0){
       patch.outgoing[dstFace.dstRank].parts.push_back(part);
+      patch.holes.push_back(idx);
     }
   }
 }
 
+void packMigrated(Patch& patch);
+
 int exchange(Patch& patch)
 {
-  std::vector<int> numSending(patch.outgoing.size());
-  std::vector<int> numRecving(patch.incoming.size());
+  std::vector<int> numSending(patch.outgoing.size(), 0);
+  std::vector<int> numRecving(patch.incoming.size(), 0);
   std::vector<MPI_Request> sizeRequests(patch.outgoing.size() + patch.incoming.size());
   std::vector<MPI_Request> partRequests;
   MPI_Request collectiveReq;
-  int totalOutgoing = 42; //to get the while loop going
+  int totalOutgoing = 0;
   int systemTotal = 0;
-  while (systemTotal > 0){
-    totalOutgoing = 0;
-    for (int f=0; f < patch.outgoing.size(); ++f){
-      Migration& m = patch.outgoing[f];
-      numSending[f] = m.parts.size();
-      totalOutgoing += m.parts.size();
-      MPI_Isend(&numSending[f], 1, MPI_INT, m.rank, send_size_tag,
-                MPI_COMM_WORLD, &sizeRequests[f]);
-      if (numSending[f] > 0){
+  for (int f=0; f < patch.outgoing.size(); ++f){
+    Migration& m = patch.outgoing[f];
+    numSending[f] = m.parts.size();
+    totalOutgoing += m.parts.size();
+#pragma sst keep
+    MPI_Isend(&numSending[f], 1, MPI_INT, m.rank, send_size_tag,
+              MPI_COMM_WORLD, &sizeRequests[f]);
+    debug("Rank %d sending %d to %d on face %c%c\n",
+           patch.id, numSending[f], m.rank, outChar(f), dimChar(f));
+    if (numSending[f] > 0){
+      MPI_Request req;
+      MPI_Isend(m.parts.data(), m.parts.size() * sizeof(Particle), MPI_BYTE,
+                m.rank, send_parts_tag, MPI_COMM_WORLD, &req);
+      partRequests.push_back(req);
+    }
+  }
+
+  for (int f=0; f < patch.incoming.size(); ++f){
+    Migration& m = patch.incoming[f];
+#pragma sst keep
+    MPI_Irecv(&numRecving[f], 1, MPI_INT, m.rank, send_size_tag,
+              MPI_COMM_WORLD, &sizeRequests[f + patch.outgoing.size()]);
+  }
+
+  MPI_Iallreduce(&totalOutgoing, &systemTotal, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD, &collectiveReq);
+
+  int numDone = 0;
+  int numNeeded = patch.incoming.size() + patch.outgoing.size();
+  while (numDone < numNeeded){
+    int idx;
+    MPI_Waitany(numNeeded, sizeRequests.data(), &idx, MPI_STATUSES_IGNORE);
+    if (idx >= patch.outgoing.size()){
+      int recvIdx = idx - patch.outgoing.size();
+      //we received the size of a particle we need - post its recv
+      int numIncoming = numRecving[recvIdx];
+      if (numIncoming > 0){
+        Migration& m = patch.incoming[recvIdx];
+        m.parts.resize(numIncoming);
+        debug("Rank %d receiving %d from %d on face %c%c\n",
+               patch.id, numRecving[recvIdx], m.rank, inChar(recvIdx), dimChar(recvIdx));
         MPI_Request req;
-        MPI_Isend(m.parts.data(), m.parts.size() * sizeof(Particle), MPI_BYTE,
+        MPI_Irecv(m.parts.data(), numIncoming*sizeof(Particle), MPI_BYTE,
                   m.rank, send_parts_tag, MPI_COMM_WORLD, &req);
         partRequests.push_back(req);
       }
     }
-
-    for (int f=0; f < patch.incoming.size(); ++f){
-      Migration& m = patch.incoming[f];
-      MPI_Irecv(&numRecving[f], 1, MPI_INT, m.rank, send_size_tag,
-                MPI_COMM_WORLD, &sizeRequests[f + patch.outgoing.size()]);
-    }
-
-    MPI_Iallreduce(&totalOutgoing, &systemTotal, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD, &collectiveReq);
-
-    int numDone = 0;
-    int numNeeded = patch.incoming.size() + patch.outgoing.size();
-    while (numDone < numNeeded){
-      int idx;
-      MPI_Waitany(numNeeded, sizeRequests.data(), &idx, MPI_STATUSES_IGNORE);
-      if (idx > patch.outgoing.size()){
-        int recvIdx = idx - patch.outgoing.size();
-        //we received the size of a particle we need - post its recv
-        int numIncoming = numRecving[recvIdx];
-        if (numIncoming > 0){
-          Migration& m = patch.incoming[recvIdx];
-          m.parts.resize(numIncoming);
-          MPI_Request req;
-          MPI_Irecv(m.parts.data(), numIncoming*sizeof(Particle), MPI_BYTE,
-                    m.rank, send_parts_tag, MPI_COMM_WORLD, &req);
-          partRequests.push_back(req);
-        }
-      }
-      ++numDone;
-    }
-    if (partRequests.size()){
-      //we have pushed progress forward and now all sizes have been communicated
-      //now wait on all the particles themselves to get shuffled
-      MPI_Waitall(partRequests.size(), partRequests.data(), MPI_STATUSES_IGNORE);
-    }
-    partRequests.clear(); //for the next round
-    MPI_Wait(&collectiveReq, MPI_STATUS_IGNORE);
+    ++numDone;
   }
+  if (partRequests.size()){
+    //we have pushed progress forward and now all sizes have been communicated
+    //now wait on all the particles themselves to get shuffled
+    MPI_Waitall(partRequests.size(), partRequests.data(), MPI_STATUSES_IGNORE);
+  }
+  partRequests.clear(); //for the next round
+  MPI_Wait(&collectiveReq, MPI_STATUS_IGNORE);
+
+  //pack the migrated particles into the main buffer
+#pragma sst instead skeletonPackMigrated(patch)
+  packMigrated(patch);
+
   return systemTotal;
 }
 
-void move(Patch& patch)
+void move(int step, Patch& patch)
 {
+  printf("Rank %d moving %d particles on step %d\n",
+         patch.id, int(patch.local.size()), step);
 #pragma omp parallel for
   for (int i=0; i < patch.local.size(); ++i){
     Particle& part = patch.local[i];
     part.deltaT = patch.deltaT;
-    moveParticle(part, patch);
+    moveParticle(i, part, patch);
+    backfill(patch);
   }
 
-#pragma sst call skeletonInitOutgoing(patch)
-#pragma sst init skeletonFillOutgoing(patch)
+#pragma sst call skeletonFillOutgoing(patch)
+#pragma sst call skeletonInitOutgoing(patch) //gets called first for now
+  int numQuiesced = patch.local.size();
   int systemTotalMoves = exchange(patch);
+
+  if (patch.local.size() < numQuiesced){
+    std::cerr << "how is patch size " << patch.local.size()
+              << " less than numQ " << numQuiesced
+              << "???" << std::endl;
+    abort();
+  }
 
   while (systemTotalMoves > 0){
 #pragma omp parallel for
-    for (int i=0; i < patch.local.size(); ++i){
+    for (int i=numQuiesced; i < patch.local.size(); ++i){
       Particle& part = patch.local[i];
-      moveParticle(part, patch);
+      moveParticle(i, part, patch);
     }
 #pragma sst call skeletonFillOutgoing(patch)
-    exchange(patch);
+    systemTotalMoves = exchange(patch);
+    numQuiesced = patch.local.size();
   }
 }
 
@@ -288,21 +503,16 @@ static inline int cellId(Patch& p, int x, int y, int z){
 
 void init(Patch& patch, int ppc, int nPatchesX, int nPatchesY, int nPatchesZ)
 {
+  patch.local.resize(ppc*patch.nCells);
   //id = z*ny*nx + y*nx + x;
   int myZ = patch.id / (nPatchesX*nPatchesY);
   int remId = patch.id % (nPatchesX*nPatchesY);
-  int myY = remId / nPatchesX;
+  int myY= remId / nPatchesX;
   int myX = remId % nPatchesX;
 
-  patch.outgoing.resize(6);
-  patch.incoming.resize(6);
-
-  //I have a plus X partner
-  int plusX = (myX + 1) % nPatchesX;
-  int plusXpartner = patchId(plusX,myY,myZ,nPatchesX,nPatchesY,nPatchesZ);
-  patch.outgoing[0].rank = plusXpartner;
-  patch.incoming[1].rank = plusXpartner;
-
+  patch.gridPosition[0] = myX;
+  patch.gridPosition[1] = myY;
+  patch.gridPosition[2] = myZ;
 
   /**
   This is how you would initialize if it were a real app
@@ -315,35 +525,52 @@ void init(Patch& patch, int ppc, int nPatchesX, int nPatchesY, int nPatchesZ)
   }
   */
 
+  debug("Rank %d maps to %d-%d-%d\n", patch.id, myX, myY, myZ);
+
+  patch.outgoing.resize(6);
+  patch.incoming.resize(6);
+
+  //I have a plus X partner
+  int plusX = (myX + 1) % nPatchesX;
+  int plusXpartner = patchId(plusX,myY,myZ,nPatchesX,nPatchesY,nPatchesZ);
+  debug("Rank %d outgoing face +X is %d\n", patch.id, plusXpartner);
+  patch.outgoing[1].rank = plusXpartner;
+  patch.incoming[0].rank = plusXpartner;
+
   //I have a minus X partner
   int minusX = (myX + nPatchesX - 1) % nPatchesX;
   int minusXpartner = patchId(minusX,myY,myZ,nPatchesX,nPatchesY,nPatchesZ);
-  patch.outgoing[1].rank = minusXpartner;
-  patch.incoming[0].rank = minusXpartner;
+  debug("Rank %d outgoing face -X is %d\n", patch.id, minusXpartner);
+  patch.outgoing[0].rank = minusXpartner;
+  patch.incoming[1].rank = minusXpartner;
 
   //I have a plus Y partner
   int plusY = (myY + 1) % nPatchesY;
   int plusYpartner = patchId(myX,plusY,myZ,nPatchesX,nPatchesY,nPatchesZ);
-  patch.outgoing[2].rank = plusYpartner;
-  patch.incoming[3].rank = plusYpartner;
+  debug("Rank %d outgoing face +Y is %d\n", patch.id, plusYpartner);
+  patch.outgoing[3].rank = plusYpartner;
+  patch.incoming[2].rank = plusYpartner;
 
   //I have a minus Y partner
   int minusY = (myY + nPatchesY - 1) % nPatchesY;
   int minusYpartner = patchId(myX,minusY,myZ,nPatchesX,nPatchesY,nPatchesZ);
-  patch.outgoing[3].rank = minusYpartner;
-  patch.incoming[2].rank = minusYpartner;
+  debug("Rank %d outgoing face -Y is %d\n", patch.id, minusYpartner);
+  patch.outgoing[2].rank = minusYpartner;
+  patch.incoming[3].rank = minusYpartner;
 
   //I have a plus Z partner
   int plusZ = (myZ + 1) % nPatchesZ;
   int plusZpartner = patchId(myX,myY,plusZ,nPatchesX,nPatchesY,nPatchesZ);
-  patch.outgoing[4].rank = plusZpartner;
-  patch.incoming[5].rank = plusZpartner;
+  debug("Rank %d outgoing face +Z is %d\n", patch.id, plusZpartner);
+  patch.outgoing[5].rank = plusZpartner;
+  patch.incoming[4].rank = plusZpartner;
 
   //I have a minus Z partner
   int minusZ = (myZ + nPatchesZ - 1) % nPatchesZ;
   int minusZpartner = patchId(myX,myY,minusZ,nPatchesX,nPatchesY,nPatchesZ);
-  patch.outgoing[5].rank = minusZpartner;
-  patch.incoming[4].rank = minusZpartner;
+  debug("Rank %d outgoing face -Z is %d\n", patch.id, minusZpartner);
+  patch.outgoing[4].rank = minusZpartner;
+  patch.incoming[5].rank = minusZpartner;
 }
 
 #define crash_main(rank,...) \
@@ -370,9 +597,6 @@ int main(int argc, char** argv)
   MPI_Init(&argc, &argv);
 
   Patch myPatch;
-  myPatch.od[0] = 2;
-  myPatch.od[1] = 2;
-  myPatch.od[2] = 2;
   MPI_Comm_rank(MPI_COMM_WORLD, &myPatch.id);
   MPI_Comm_size(MPI_COMM_WORLD, &myPatch.nPatches);
 
@@ -408,9 +632,10 @@ int main(int argc, char** argv)
                nPatchesTotal, nPatchesX, nPatchesY, nPatchesZ, myPatch.nPatches);
   }
 
+#pragma sst call skeletonInitOverdecomposition(myPatch,ppc)
   init(myPatch, ppc, nPatchesX, nPatchesY, nPatchesZ);
   for (int s=0; s < nSteps; ++s){
-    move(myPatch);
+    move(s,myPatch);
   }
 
   MPI_Finalize();
