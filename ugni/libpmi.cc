@@ -114,7 +114,7 @@ extern "C" int PMI_Allgather(void *in, void *out, int len)
 {
   auto tport = active_transport();
   debug(tport, "PMI_Allgather()");
-  int init_tag = 42;
+  int init_tag = tport->allocate_global_collective_tag();
   tport->allgather(out, in, len, 1, init_tag);
   tport->collective_block(sumi::collective::allgather, init_tag);
   //for now, I know that any data from this will be completely ignored
@@ -126,8 +126,9 @@ extern "C" int PMI_Barrier()
 {
   auto api = active_transport();
   debug(api, "PMI_Barrier()");
-  api->barrier(42);
-  api->collective_block(sumi::collective::barrier, 42);
+  int init_tag = api->allocate_global_collective_tag();
+  api->barrier(init_tag);
+  api->collective_block(sumi::collective::barrier, init_tag);
   return PMI_SUCCESS;
 }
 

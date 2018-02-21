@@ -9,7 +9,10 @@ RegisterKeywords(
  {"odz", "the level of intra-patch overdecomposition in Z direction"},
  {"unitx", "the stride of X units with uniform particle move characteristics" },
  {"unity", "the stride of Y units with uniform particle move characteristics" },
- {"unitz", "the stride of Z units with uniform particle move characteristics" }
+ {"unitz", "the stride of Z units with uniform particle move characteristics" },
+ {"scramble", "whether to constantly scramble particle movements or keep steady flow"},
+ {"max_migration", "the max fraction of particles that can migrate"},
+ {"min_migration", "the min fraction of particles that can migrate"}
 );
 
 struct Particle {
@@ -88,23 +91,32 @@ struct Patch {
   double microIterScale;
   //What is current fraction of particles migrating
   double migrateFraction;
+  double minMigrateFraction;
+  double maxMigrateDifference;
+  bool scrambleMigration;
   int boxOcc[SKEL_MAX_OD][SKEL_MAX_OD][SKEL_MAX_OD]; //allow for max 4x overdecomp in each dim
 };
 
-static inline double getSkeletonFraction(int idx)
+static inline double getSkeletonFraction(int step, Patch& p, int dim)
 {
-  return 0.04*((idx % 7)/7.) + 0.01;
+  static const int primes[] = {
+   1571, 2459, 2801, 3559, 3079, 3019, 6269
+  };
+  static const int numPrimes = sizeof(primes) / sizeof(int);
+
+  int myIdx = p.od[dim]*p.gridPosition[dim] / p.uniformityFactory[dim];
+  if (p.scrambleMigration){
+    myIdx = primes[(myIdx+step) % numPrimes] % numPrimes;
+  }
+  double myExtraFraction = p.maxMigrateDifference * myIdx / numPrimes;
+  return p.minMigrateFraction + myExtraFraction;
 }
 
-void skeletonInitOutgoing(Patch& p)
+void skeletonInitOutgoing(int step, Patch& p)
 {
-  int myXidx = p.od[0]*p.gridPosition[0] / p.uniformityFactory[0];
-  int myYidx = p.od[1]*p.gridPosition[1] / p.uniformityFactory[1];
-  int myZidx = p.od[2]*p.gridPosition[2] / p.uniformityFactory[2];
-
-  double xInc = getSkeletonFraction(myXidx);
-  double yInc = getSkeletonFraction(myYidx);
-  double zInc = getSkeletonFraction(myZidx);
+  double xInc = getSkeletonFraction(step, p, 0);
+  double yInc = getSkeletonFraction(step, p, 1);
+  double zInc = getSkeletonFraction(step, p, 2);
 
   p.microIterScale = p.migrateFraction = (xInc + yInc + zInc);
 
@@ -132,6 +144,16 @@ void skeletonInitOverdecomposition(Patch& p, int ppc){
       }
     }
   }
+
+  p.minMigrateFraction = params->get_optional_double_param("min_migration", 0.02);
+  double maxMig = params->get_optional_double_param("max_migration", 0.06);
+  p.maxMigrateDifference = maxMig - p.minMigrateFraction;
+  if (p.maxMigrateDifference < 0){
+    std::cerr << "Max migration=" << maxMig << " must be greater than min="
+              << p.minMigrateFraction << std::endl;
+    abort();
+  }
+  p.scrambleMigration = params->get_optional_bool_param("scramble", false);
 }
 
 void skeletonPackMigrated(Patch& p){
@@ -469,7 +491,7 @@ void move(int step, Patch& patch)
   }
 
 #pragma sst call skeletonFillOutgoing(patch)
-#pragma sst call skeletonInitOutgoing(patch) //gets called first for now
+#pragma sst call skeletonInitOutgoing(step,patch) //gets called first for now
   int numQuiesced = patch.local.size();
   int systemTotalMoves = exchange(patch);
 
