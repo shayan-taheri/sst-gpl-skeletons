@@ -31,6 +31,7 @@ class rdma_cm_message : public sumi::message {
  public:
   rdma_cm_message(rdma_cm_event_type tp): type_(tp) {}
   rdma_cm_event_type get_event_type() {return type_;}
+  struct rdma_cm_id* id_;
 private:
   rdma_cm_event_type type_;
 };
@@ -56,6 +57,7 @@ class rdma_cm_transport : public sstmac::sumi_transport
     sumi::message *msg = blocking_poll(channel->fd);
     rdma_cm_message *rmsg = dynamic_cast<rdma_cm_message*>(msg);
     (*event)->event = rmsg->get_event_type();
+    (*event)->id = rmsg->id_;
   }
 
 //  void init() override {
@@ -258,9 +260,8 @@ int rdma_resolve_addr(struct rdma_cm_id *id, struct sockaddr *src_addr,
 
   std::cerr << "dst is " << node << "\n";
 
-  // bind to an rdma device
-
   rdma_cm_message* msg = new rdma_cm_message(RDMA_CM_EVENT_ADDR_RESOLVED);
+  msg->id_ = id;
   rdma_cm_transport* api = sstmac_rdma_cm();
   int me = api->rank();
   api->smsg_send(me, sumi::message::software_ack, msg,
@@ -565,7 +566,7 @@ int rdma_get_cm_event(struct rdma_event_channel *channel,
  */
 int rdma_ack_cm_event(struct rdma_cm_event *event)
 {
-  spkt_abort_printf("unimplemented: rdma_ack_cm_event()");
+  delete event;
 }
 
 uint16_t rdma_get_src_port(struct rdma_cm_id *id)

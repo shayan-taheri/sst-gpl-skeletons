@@ -1,4 +1,4 @@
-TARGETS := librdmacm.la
+TARGETS := librdmacm.la libibverbs.la
 
 LIBTOOL = glibtool
 CXX :=    libsst++
@@ -9,7 +9,7 @@ LIBDIR := $(HOME)/install/sst-macro-devel/lib
 PREFIX := $(HOME)/install/sst-ibverbs
 LDFLAGS :=  -Wl,-rpath,$(LIBDIR)
 
-HEADERS = rdma_cma.h
+HEADERS = rdma_cma.h infiniband/verbs.h
 
 .PHONY: clean install 
 
@@ -38,4 +38,5 @@ install: $(TARGETS) $(HEADERS)
 	cp rdma_cma.h $(PREFIX)/include/rdma
 	mkdir -p $(PREFIX)/lib
 	$(LIBTOOL) --mode=install /usr/bin/install -c librdmacm.la $(LIBDIR)
+	$(LIBTOOL) --mode=install /usr/bin/install -c libibverbs.la $(LIBDIR)
 	$(LIBTOOL) --finish $(PREFIX)/lib
