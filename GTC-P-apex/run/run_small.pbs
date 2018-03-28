@@ -1,0 +1,11 @@
+#!/bin/bash
+#PBS -qdebug
+#PBS -lmppwidth=128
+#PBS -lwalltime=0:05:00
+#PBS -N gtcp_small
+#PBS -j oe
+cd $PBS_O_WORKDIR
+
+export OMP_NUM_THREADS=2
+aprun -n 64 -d 2 -cc numa_node ./gtcp A.txt  30 64 
+

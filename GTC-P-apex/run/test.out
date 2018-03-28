@@ -1,0 +1,24 @@
+NOT use customized MPI mapping on BGQ
+Using n_rad_buf=7 buffer cells: gyroradius/deltar=0.900307
+istep=1 irk=1 time=0.0
+istep=1 irk=2 time=0.0
+istep=2 irk=1 time=0.2
+istep=2 irk=2 time=0.2
+istep=3 irk=1 time=0.3
+istep=3 irk=2 time=0.3
+istep=4 irk=1 time=0.3
+istep=4 irk=2 time=0.4
+istep=5 irk=1 time=0.4
+istep=5 irk=2 time=0.4
+istep=6 irk=1 time=0.5
+istep=6 irk=2 time=0.5
+istep=7 irk=1 time=0.6
+istep=7 irk=2 time=0.6
+istep=8 irk=1 time=0.6
+istep=8 irk=2 time=0.7
+istep=9 irk=1 time=0.7
+istep=9 irk=2 time=0.8
+istep=10 irk=1 time=0.8
+istep=10 irk=2 time=0.8
+ Checking answers after last time step.... 
+ Skipping error check... could not identify problem size. 

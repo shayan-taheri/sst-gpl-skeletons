@@ -1,0 +1,12 @@
+#!/bin/bash
+#PBS -qregular
+#PBS -lmppwidth=33024
+#PBS -lwalltime=00:30:00
+#PBS -joe
+#PBS -N gtcp_large
+
+cd $PBS_O_WORKDIR
+
+export OMP_NUM_THREADS=12
+aprun -n 2752 -d 12 -cc numa_node ./gtcp E.txt  200 64  &> gtcp_large.out
+

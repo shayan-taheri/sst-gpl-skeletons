@@ -1,0 +1,275 @@
+=== Outline ===
+I. Description
+II. Parallelism
+III. How to build
+IV. How to run
+  A. Inputs and Options
+  B. Setting the parallel decomposition.
+  C. Problem Sizes and Example 
+V. Reporting Results
+VI. Original README for GTC-P
+
+=== I. Description ===
+
+This is the README file for the APEX distribution of the GTC-P application benchmark. 
+
+The Princeton Gyrokinetic Toroidal Code (GTC-P) simulates plasma turbulence within Tokamak fusion devices. The Tokamak device generates a magnetic field that confines a plasma within a toroidal (i.e. donut-shaped) cavity and accelerates the plasma particles (whether ions or electrons) around the torus. Particles also interact with each other via Coulomb forces. The Coulomb interactions are highly dynamical and give rise to instabilities of the plasma structure that must be understood and controlled in order to create an efficient fusion energy source.
+
+GTC-P simulates the motion of ions through the Tokamak by solving a Vlassov-Poisson equation using a particle-in-cell (PIC) algorithm. During each PIC time-step, the charge distribution of the particles is interpolated onto a grid, Poisson's equation is solved on the grid, the electric fields are interpolated from the grid to the particles, and the phase-space coordinates of the particles are updated according the electric field.
+
+Within GTC-P, the external magnetic field provided by the Tokamak causes ions to move along a gyrokinetic (i.e. helical) path. The roughly circular motion of an ion around this helix is much faster than it's motion along the guiding center, so the ion's motion can be approximated by a ring of charge travelling on a mean trajectory. This gyrokinetic approximation increases the efficiency of GTC-P by allowing much larger time steps than could be used otherwise.
+
+The memory access patterns charge deposition and interpolation steps are challenging for most memory subsystems.
+Like most PIC codes, the unordered nature of the particles in GTC-P gives rise to nonlinear sequences of grid points to be accessed. Indirect addressing of the grid elements and gyro-averaging further increase complexity of GTC-P's memory access pattern.
+
+
+=== II. Parallelism ===
+
+GTC-P is parallelized using MPI and, optionally, OpenMP. The MPI decomposition has three levels of nested parallelism, a two dimensional domain decomposition and a particle decomposition:
+
+1) At the highest level, the physical (toroidal) domain is divided into sections. Currently, each section contains only one poloidal plane (i.e all gripoints with the same zeta coordinate) plus a copy of an adjacent plane. This limits the number of toroidal sections (or MPI processes in the toroidal dimension) to the total number of poloidal planes. 
+
+2) The toroidal sections are further divided in the radial dimension: radial subdomains contain concentric annular slices within a toroidal section.
+
+The above 2D domain decomposition distributes the grid-based work, such as "poisson", "smooth" and "field", to multiple/many MPI processes. 
+
+3) The particles in each radial subdomain can be further distributed among processes that share the same physical domain as their parent, but have a subset of the particles from that radial subdomain.
+
+The 2D domain decomposition plus particle decomposition distribute the particle-based work, such as "charge" and "push", to many MPI processes. 
+
+The primary OpenMP parallelizations consist of parallel for loops over particle arrays. Most of the remaining operations are threaded as well.
+
+=== III. How to build ===
+
+Source code is located in the directory src/mpi. Makefiles for various compilers, each named Makefile.<arch> are in the directory ARCH. Select a suitable makefile, copy and tailor it to your system, and note the value of the EXEEXT variable. From the top level directory, the command "make ARCH=<arch>" will compile an executable named src/mpi/bench_gtc_<EXEEXT>
+
+For example, on a vanilla linux system
+1)  start from the top level GTC-P directory 
+2)  cp ARCH/Makefile.generic ARCH/Makefile.vanilla
+3)  Modify ARCH/Makefile.example to match your compiler and architecture.
+3b) Within ARCH/Makefile.example, set EXTEXT=_example_gcc
+4)  make ARCH=vanilla
+This will create src/mpi/bench_gtc_example_gcc
+
+=== IV. How to run ===
+
+--- IV.A Inputs and Options ---
+
+The GTC-P benchmark takes three command line parameters: 
+- input: the name of the input file
+- Nparticle: the number of particles per grid point
+- Ntoroidal: the number of toroidal sections to use for the parallel decomposition.
+
+The input files (e.g. A.txt) describe most simulation parameters.
+Nparticle is definded differently for each problem size; refer to the table below (Section IV.C)
+
+--- IV.B Setting the parallel decomposition ---
+
+As described above (Section II) , GTC-P has three nested levels of MPI paralleism: toroidal domains, particle domains, and radial domains. 
+The number of toroidal domains is determined by the Ntoroidal command line parameter. 
+The number of particle decomposition is set by the npe_radiald parameter in the input file. 
+The number of radial domains is determined using the following formula: 
+  #radial = #mpi / ( Ntoridal * npe_radiald)
+
+For the Crossroads/NERSC-9 procurement, vendors may choose whatever MPI concurrency they prefer, but the following constraints apply to the MPI decompostion: i) Ntoroidal = 64, and ii) npe_radiald = 1 (no particle decomposition). Thus, additional ranks will increase the number of radial domains. Additional parallelization may be obtained using threads. These constraints reflect typical use of GTC-P in "delta f" simulations with a few hundred particles per grid point.
+
+--- IV.C Problem sizes & Example ---
+
+Input files and sample job scripts are located in the run/ directory. The input files may not be modified. Three problem sizes are provided. The "small" problem is intended to facilitate single-node profiling. The "large" problem consists of a 8e6-point ("size-E") grid, and was used to characterize the reference system (See https://www.nersc.gov/users/computational-systems/edison/ ). The "grand challenge" problem uses the same "E-sized" grid as the large problem, but with 400 particles per grid point. 
+
+Problem  Batch           Input   Particles   Total
+Size     Script          File    Per Cell    Memory
+===================================================
+Small    run_small.pbs   A.txt       30      30 GB
+Large    run_large.pbs   E.txt      200      31 TB
+Grand    run_grand.pbs   E.txt      400      62 TB
+
+The large problem may be run, for example, using 2752 MPI process and 12 OpenMP threads on NERSC's "Edison" system with the following commands (see run_large.pbs):
+export OMP_NUM_THREADS=12
+aprun -n 2752 -d 12 bench_gtc_example_gcc E.txt 200 64
+
+
+=== V. Reporting Results ===
+
+The APEX response requires the concurrency used and the "Total time" reported in the GTC-P output for the grand challenge problem only.
+
+
+=== VI. Original README ===
+
+-----------------------------------
+C+MPI/OpenMP GTC benchmark
+Based on the GTC-NERSC6 Fortran
+MPI/OpenMP benchmark
+----------------------------------
+
+Kamesh Madduri
+madduri@cse.psu.edu
+Last updated: August 8, 2012
+----------------------------------
+
+Files
+-----
+
+  The current MPI/OpenMP code is in the src/mpi folder.
+  bench_gtc.h        : common header file for all the kernels.
+  bench_gtc_opt.h    : set optimizations and test parameters.
+  bench_gtc_port.h   : include header files for SSE, aligned malloc.
+  *.c                : the source files, following the same naming
+                       convention as GTC-Simple.
+
+  The reference serial and the Pthreads versions of the charge ans push 
+  kernels will be moved to the "serial" and "pthreads" directories 
+  under src. Please contact Kamesh Madduri (madduri@cse.psu.edu)
+
+  The ARCH directory has Makefiles.
+
+  The timing directory has portable timers (not being used in the MPI code).
+
+Building the code
+-----------------
+
+  Edit one of the files in ARCH: see, for example, Makefile.hopper-opt or 
+  Makefile.generic (serial).
+
+  Build the code with
+$ make ARCH=hopper-opt
+  (or the appropriate Makefile suffix)
+  This compiles the source files in the src/mpi directory.
+   
+  One executable will be built in src/mpi.
+
+  Set USE_MPI to 0 (-DUSE_MPI=0) to build the serial code.
+
+  Just compile without OpenMP flags to disable it.
+
+Running the code
+----------------
+
+  Four config files A.txt, B.txt, C.txt, and D.txt are included in src/mpi/input. 
+  The # of particles per cell and the number of toroidal domains are
+  set with command-line arguments.
+
+e.g., 
+$ mpiexec -n 4 bench_gtc_carver_opt B.txt 20 4
+
+  The # of particle domains is calculated based on the values of
+  numberpe and ntoroidal. 
+  npartdom = numberpe / ntoroidal
+
+Important
+---------
+
+  Before running, make sure that the value of ASSUME_MZETA_EQUALS1 in the 
+  file gtc_bench_opt.h is set correctly. This may be set to 1 when mzeta = 1
+  (or mzetamax = ntoroidal), but should be 0 in all other cases.
+
+  AUX_STORE1 and AUX_STORE2 in gtc_bench_opt.h should be set to 0 only for
+  benchmarking the impact of stores.
+  
+Assumptions
+-----------
+
+  Some parameters are hard-coded in the current version, and code for 
+  alternate cases has not been implemented yet. Hence be careful when
+  modifying these values.
+  
+  nonlinear = 1.0  /* nonlinear = 0.0 requires some FFTs etc. */
+  paranl    = 1.0  
+  irun      = 0    /* always start sim from time step 0, no restart */
+  nhybrid   = 0    /* adiabatic, not kinetic, electrons */ 
+  mflux     = 5
+  flow0     = flow1 = flow2 = 0
+  nbound    = 4
+  track_particles = 0
+  iload     = 0
+  ismooth   = 0    /* simplifies smooth */
+ 
+Other things to note
+--------------------
+
+  The particle and field data structure variable names match 
+  (in most cases) the Fortran names. However, 
+  zion(1,:) is z0[], zion(2,:) is z1, ... , zion(6,:) is z5
+  zion0(0,:) is z00[], zion0(1,:) is z01, ..., zion0(6,:) is z05
+
+  All Fortran multidimensional arrays have been flattened to 1D, 
+  0-indexed arrays in the C code.
+
+
+HOW TO BUILD AND RUN GTCP_CPU_SC13
+
+B. Wang 1/21/2013
+----------------------------------------
+0. GTC-P is a MPI/OpenMP hybrid code which solves the 5D Vlasov-Poisson equation in 3D
+   torus geometry. It is easy compile and run on most computing platforms since the code
+   does not rely on any third party library.
+
+1. After unzipping and untarring the file, you will find most of the source code in the
+   subdirectory src/mpi.
+
+2. The makefiles are in subdirectory ARCH. Included are several example makefiles
+   for different systems (Mira-BGQ system at ALCF, Titan-cray XK7 system at OLCF, etc.)
+   Please modify it for your system accordingly.
+
+3. Several example scripts (file name started with build_*.sh) are included in the subdirectory
+   src/mpi to build the code. Basically, it loads the appropriate modules and issues the command
+   with the correct arguments.
+
+4. The input problem sizes are included in src/mpi/input. For example, if we run all tests
+   with 100 particles per cell (ppc) with toroidal domain decomposition only,
+   the memory usage for each PE (processor element) is:
+   input filename    # of particles in one toroidal domain (mem. usage)  # of grid pts (mem. usage)
+   -------------    --------------------------------------------------  ----------------------------
+   A.txt            3,235,896     (0.3G)                                 32,449    (1M) 
+   B.txt            1,235,644,416 (1.2G)                                 128,893   (4M)
+   C.txt            4,928,876,544 (4.8G)                                 513,785   (16M)
+   D.txt            19,688,128,512 (19.2G)                               2,051,567 (64M)
+
+   Based on toroidal domain decomposition, we introduce two additional levels of distributed parallelism:
+   radial domain decomposition and particle decomposition. By introducing radial domain decomposition,
+   the amount of computation and memory usage in a single toroidal domain are distributed
+   across different PEs in radial dimension. For example, if we decompose one toroidal domain into 8
+   radial domains, the memory usage in each PE will be roughly 1/8 of the number given on the table above.
+
+   We can further distribute the particle-related work and particle memory usage through particle
+   decomposition on each radial domain. For example, if we decompose one toroidal domain into 8 radial
+   domains and then distribute the total number of particles in each radial domain on 2 MPI processes,
+   the particle memory usage in each PE will be 1/16 of the number given on the table above.
+
+   Assume that we use only 1 particle copy in each radial domain (no particle decomposition), a typical
+   weak scaling experiment on Mira (BG/Q system at ALCF) will use the parameters below:
+   problem size input filename # of domain in toroidal dim. # of domain in radial dim. total # of MPI proc.
+   -----------  -------------- ---------------------------  -------------------------  -------------------
+   a125         A.txt          64                           8                          512
+   a250         B.txt          64                           32                         2048
+   a500         C.txt          64                           128                        8192
+   a1000        D.txt          64                           512                        32768
+
+   For smaller size systems, such as Piz Daint, Stampede, a typical weak scaling expriment will use the parameter:
+   -----------  -------------- ---------------------------  -------------------------  -------------------
+   a125         A.txt          64                           1                          64
+   a250         B.txt          64                           4                          256
+   a500         C.txt          64                           16                         1024
+   a1000        D.txt          64                           64                         4096
+
+5. the # of domain in toroidal dim is given as a command line argument (Due to Landau Damping, the number of 
+   toroidal dim is kept as an constant for all problem sizes, e.g., 64.)
+   the # of particle copies (particle decomposition) in each radial domain is given in the input file, npe_radiald
+   the # of domain in radial dim is calculated as: total # of MPI proc/(# of domain in toroidal dim * npe_radiald)
+
+6. The loop-level parallelism is turned on by using OpenMP.
+
+7. For example, we use the command below to run the a125 test with 1 MPI per node and with npe_radiald=1, 100ppc
+   in Mira (BG/Q) at ALCF: 
+   qsub -n 512 --proccount 512 --mode c1 -t 60 --env BG_SHAREDMEMSIZE=32:PAMID_CONTEXT_MAX=26:BG_THREA\
+   DLAYOUT=1:OMP_NUM_THREADS=64:BG_SMP_FAST_WAKEUP=YES:OMP_WAIT_POLICY=active ./executable ./input/A.txt 100 64
+
+   The total number of MPI process for the simulation is 512
+   The number of MPI process in a compute node is 1
+   The number of OpenMP threads is 64 (each IBM A2 core supports 4-way multithreading) for each MPI process
+   The input file is ./input/A.txt
+   The number of particles per cell is 100
+   The number of domain in the toroidal dimension is 64
+
+8. For performance study, mstep=100 is commonly used. (given in input file).
+   For physics study, mstep=10000 or more is commonly used.

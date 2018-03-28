@@ -1,0 +1,21 @@
+# Define the following to 1 to enable build
+BENCH_GTC_MPI = 1
+BENCH_CHARGEI_PTHREADS = 0
+BENCH_PUSHI_PTHREADS = 0
+BENCH_SERIAL = 0
+
+CC = cc
+MPICC = cc
+CFLAGS = -DUSE_MPI=1 -std=gnu99
+CFLAGSOMP = -openmp
+COPTFLAGS =  -O3 
+#CDEPFLAGS = -MD 
+CLDFLAGS = 
+MPIDIR = 
+CFLAGS  +=
+
+EXEEXT = _edison_opt
+
+AR = ar
+ARCRFLAGS = cr
+RANLIB = ranlib

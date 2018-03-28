@@ -1,0 +1,26 @@
+# Define the following to 1 to enable build
+BENCH_GTC_MPI = 1
+BENCH_CHARGEI_PTHREADS = 0
+BENCH_PUSHI_PTHREADS = 0
+BENCH_SERIAL = 0
+
+# Set ADIOS DIR
+ADIOS_INC:=`${ADIOS_DIR}/bin/adios_config -c`
+ADIOS_LIB:=`${ADIOS_DIR}/bin/adios_config -l`
+
+CC = mpixlc_r
+MPICC = mpixlc_r
+CFLAGS = -DUSE_MPI=1 ${ADIOS_INC} -DUSE_ADIOS=1
+CFLAGSOMP = -qsmp=omp:noauto
+COPTFLAGS = -O3 -g
+CDEPFLAGS = 
+#CLDFLAGS = -L/home/morozov/lib -lmpihpm_smp -L/bgsys/drivers/ppcfloor/bgpm/lib -lbgpm        
+LIB:=/bgsys/drivers/ppcfloor/spi/lib/libSPI_upci_cnk.a ${ADIOS_LIB}
+MPIDIR = 
+CFLAGS  +=
+
+EXEEXT = _vesta_opt
+
+AR = ar
+ARCRFLAGS = cr
+RANLIB = ranlib
