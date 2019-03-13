@@ -6,7 +6,7 @@
 #include <sstmac/software/process/app.h>
 #include <sstmac/software/process/operating_system.h>
 #include <sstmac/software/process/thread.h>
-#include <sstmac/libraries/sumi/sumi_transport.h>
+#include <sumi/sim_transport.h>
 
 MakeDebugSlot(pmi)
 
@@ -14,21 +14,21 @@ MakeDebugSlot(pmi)
   debug_printf(sprockit::dbg::pmi, "PMI Rank %d: %s", tport->rank(), \
     sprockit::printf(__VA_ARGS__).c_str())
 
-extern sumi::transport* active_transport();
+extern sumi::Transport* activeTransport();
 
-static sstmac::sw::app* current_app(){
-  return sstmac::sw::operating_system::current_thread()->parent_app();
+static sstmac::sw::App* current_app(){
+  return sstmac::sw::OperatingSystem::currentThread()->parentApp();
 }
 
 extern "C" int PMI_Get_rank(int *ret)
 {
-  *ret = active_transport()->rank();
+  *ret = activeTransport()->rank();
   return PMI_SUCCESS;
 }
 
 extern "C" int PMI_Get_size(int* ret)
 {
-  *ret = active_transport()->nproc();
+  *ret = activeTransport()->nproc();
   return PMI_SUCCESS;
 }
 
@@ -60,7 +60,7 @@ PMI2_Abort(void)
 extern "C" int
 PMI2_Job_GetId(char jobid[], int jobid_size)
 {
-  auto thr = sstmac::sw::operating_system::current_thread();
+  auto thr = sstmac::sw::OperatingSystem::currentThread();
   ::sprintf(jobid, "%d", thr->aid());
   return PMI_SUCCESS;
 }
@@ -68,7 +68,7 @@ PMI2_Job_GetId(char jobid[], int jobid_size)
 extern "C" int 
 PMI2_Init(int *spawned, int *size, int *rank, int *appnum)
 {
-  auto api = active_transport();
+  auto api = activeTransport();
   api->init();
   debug(api, "PMI2_Init()");
   *size = api->nproc();
@@ -84,7 +84,7 @@ extern "C" int
 PMI2_Finalize()
 {
   pmi_finalized = true;
-  auto api = active_transport();
+  auto api = activeTransport();
   debug(api, "PMI2_Finalize()");
   api->finish();
   return PMI_SUCCESS;
@@ -93,30 +93,31 @@ PMI2_Finalize()
 extern "C" int 
 PMI_Get_nidlist_ptr(void** nidlist)
 {
-  *nidlist = active_transport()->nidlist();
+  *nidlist = activeTransport()->nidlist();
   return PMI_SUCCESS;
 }
 
 extern "C" int PMI_Init()
 {
-  active_transport()->init();
+  activeTransport()->init();
   return PMI_SUCCESS;
 }
 
 extern "C" int PMI_Finalize()
 {
-  active_transport()->finish();
+  activeTransport()->finish();
   return PMI_SUCCESS;
 }
 
 
 extern "C" int PMI_Allgather(void *in, void *out, int len)
 {
-  auto tport = active_transport();
+  auto tport = activeTransport();
   debug(tport, "PMI_Allgather()");
-  int init_tag = tport->allocate_global_collective_tag();
-  tport->allgather(out, in, len, 1, init_tag);
-  tport->collective_block(sumi::collective::allgather, init_tag);
+  int init_tag = tport->engine()->allocateGlobalCollectiveTag();
+  tport->engine()->allgather(out, in, len, 1, init_tag, sumi::Message::default_cq);
+  auto* msg = tport->engine()->blockUntilNext(sumi::Message::default_cq);
+  delete msg;
   //for now, I know that any data from this will be completely ignored
   //so don't bother doing it
   return PMI_SUCCESS;
@@ -124,11 +125,12 @@ extern "C" int PMI_Allgather(void *in, void *out, int len)
 
 extern "C" int PMI_Barrier()
 {
-  auto api = active_transport();
+  auto api = activeTransport();
   debug(api, "PMI_Barrier()");
-  int init_tag = api->allocate_global_collective_tag();
-  api->barrier(init_tag);
-  api->collective_block(sumi::collective::barrier, init_tag);
+  int init_tag = api->engine()->allocateGlobalCollectiveTag();
+  api->engine()->barrier(init_tag, sumi::Message::default_cq);
+  auto* msg = api->engine()->blockUntilNext(sumi::Message::default_cq);
+  delete msg;
   return PMI_SUCCESS;
 }
 

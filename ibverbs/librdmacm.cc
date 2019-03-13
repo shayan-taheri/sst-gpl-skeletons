@@ -74,7 +74,7 @@ rdma_cm_transport* sstmac_rdma_cm()
   return tp;
 }
 
-sumi::transport* active_transport()
+sumi::transport* activeTransport()
 {
   return sstmac_rdma_cm();
 }

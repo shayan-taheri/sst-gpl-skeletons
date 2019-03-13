@@ -1,15 +1,18 @@
 TARGETS := libugni.la libibverbs.la libpmi.la
 
-#CXX :=    g++
-#CC :=     gcc
+ifeq ($(SSTMAC),)
+$(error Must specify installation with SSTMAC=)
+endif
+
 LIBTOOL = glibtool
-CXX :=    libsst++
-CC :=     libsstcc
+CXX :=    $(SSTMAC)/bin/libsst++
+CC :=     $(SSTMAC)/bin/libsstcc
 CXXFLAGS := -fPIC -O3
-CPPFLAGS := -I. -I$(HOME)/Programs/install/sst-core/clang/include
+CPPFLAGS := -I. 
 LIBDIR :=  
 PREFIX := $(shell $(CXX) --prefix)
 LDFLAGS :=  -Wl,-rpath,$(PREFIX)/lib
+
 
 HEADERS = gni_pub.h pmi.h pmi_cray.h udreg_pub.h hugetlbfs.h
 

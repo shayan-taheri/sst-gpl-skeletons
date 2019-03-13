@@ -2,11 +2,10 @@
 #include "pmi.h"
 #include <sprockit/errors.h>
 #include <sumi/message.h>
-#include <sumi/transport.h>
+#include <sumi/sim_transport.h>
 #include <sstmac/software/api/api.h>
 #include <sstmac/software/process/operating_system.h>
 #include <sstmac/software/process/thread.h>
-#include <sstmac/libraries/sumi/sumi_transport.h>
 
 MakeDebugSlot(ugni);
 
@@ -14,36 +13,36 @@ MakeDebugSlot(ugni);
   debug_printf(sprockit::dbg::ugni, "GNI Rank %d: %s", tport->rank(), \
     sprockit::printf(__VA_ARGS__).c_str())
 
-class gni_message : public sumi::message {
+using sstmac::hw::NetworkMessage;
+
+class GNIMessage : public sumi::Message {
  public:
   void* data() const {
-    switch(payload_type()){
-      case header:
-      case eager_payload:
-      case rdma_put:
-        return local_buffer().ptr;
-        break;
-      case rdma_get:
-        return remote_buffer().ptr;
-        break;
-      case software_ack:
-      case nvram_get:
-      case rdma_put_ack:
-      case rdma_get_ack:
+    switch(NetworkMessage::type()){
+      case payload:
+      case rdma_get_payload:
+        return NetworkMessage::localBuffer();
+      case rdma_put_payload:
+        return NetworkMessage::remoteBuffer();
+      case null_netmsg_type:
+      case nvram_get_request:
+      case nvram_get_payload:
+      case failure_notification:
+      case rdma_get_request:
+      case rdma_get_sent_ack:
       case rdma_get_nack:
-      case eager_payload_ack:
-      case failure:
-      case none:
-        spkt_abort_printf("bad payload type %s in fetching gni message data", tostr(payload_type()));
+      case rdma_put_sent_ack:
+      case rdma_put_nack:
+      case payload_sent_ack:
         return nullptr;
     }
   }
 
-  uint64_t inst_id() const {
+  uint64_t instId() const {
     return inst_id_;
   }
 
-  void set_inst_id(uint64_t id) {
+  void setInstId(uint64_t id) {
     inst_id_ = id;
   }
 
@@ -51,30 +50,30 @@ class gni_message : public sumi::message {
     return type_;
   }
 
-  void set_type(gni_post_type_t ty) {
+  void setType(gni_post_type_t ty) {
     type_ = ty;
   }
 
-  uint64_t msg_id() const {
+  uint64_t msgId() const {
     return msg_id_;
   }
 
-  void set_msg_id(uint64_t msg_id) {
+  void setMsgId(uint64_t msg_id) {
     msg_id_ = msg_id;
   }
 
-  message* clone(payload_type_t ty) const override {
-    gni_message* msg = new gni_message;
-    clone_into(msg);
-    return msg;
+  NetworkMessage* cloneInjectionAck() const override {
+    auto* cln = new GNIMessage(*this);
+    cln->convertToAck();
+    return cln;
   }
-
  protected:
-  void clone_into(gni_message* msg) const {
-    msg->type_ = type_;
-    msg->inst_id_ = inst_id_;
-    msg->msg_id_ = msg_id_;
-    sumi::message::clone_into(msg);
+  template <class... Args>
+  GNIMessage(uint64_t inst_id, uint64_t msg_id, gni_post_type_t type,
+             Args&&... args) :
+    sumi::Message(std::forward<Args>(args)...),
+    inst_id_(inst_id), type_(type), msg_id_(msg_id)
+  {
   }
 
  private:
@@ -83,15 +82,27 @@ class gni_message : public sumi::message {
   uint64_t msg_id_;
 };
 
-class gni_rdma_message : public gni_message {
+class GNIRdmaMessage : public GNIMessage {
  public:
-  gni_rdma_message() : sync_flag_addr_(0), pd_(nullptr) {}
+  template <class... Args>
+  GNIRdmaMessage(uint64_t inst_id, gni_post_descriptor_t* descr,
+                 Args&&... args)
+    : GNIMessage(inst_id, std::numeric_limits<uint64_t>::max(), descr->type,
+                 std::forward<Args>(args)...),
+      first_op_(descr->first_operand),
+      second_op_(descr->second_operand),
+      cqwrite_val_(descr->cqwrite_value),
+      sync_flag_addr_(descr->sync_flag_addr),
+      sync_flag_value_(descr->sync_flag_value),
+      pd_(descr)
+  {
+  }
 
-  void get_completed(gni_post_descriptor_t** descr){
-    switch(payload_type()){
-    case eager_payload_ack:
-    case rdma_put_ack:
-    case rdma_get_ack:
+  void getCompleted(gni_post_descriptor_t** descr){
+    switch(NetworkMessage::type()){
+    case payload_sent_ack:
+    case rdma_put_sent_ack:
+    case rdma_get_sent_ack:
       //acks must return the original pd
       *descr = pd_;
       break;
@@ -100,9 +111,9 @@ class gni_rdma_message : public gni_message {
       pd->first_operand = first_op_;
       pd->second_operand = second_op_;
       pd->cqwrite_value = cqwrite_val_;
-      pd->local_addr = (uint64_t) local_buffer().ptr;
-      pd->remote_addr = (uint64_t) remote_buffer().ptr;
-      pd->length = byte_length();
+      pd->local_addr = (uint64_t) localBuffer();
+      pd->remote_addr = (uint64_t) remoteBuffer();
+      pd->length = byteLength();
       pd->sync_flag_value = sync_flag_value_;
       pd->sync_flag_addr = sync_flag_addr_;
       *descr = pd;
@@ -111,62 +122,43 @@ class gni_rdma_message : public gni_message {
     }
   }
 
-  ~gni_rdma_message(){}
+  ~GNIRdmaMessage(){}
 
-  void write_sync_value() override {
+  void writeSyncValue() override {
     if (sync_flag_addr_){
       uint64_t* ptr = (uint64_t*) sync_flag_addr_;
       *ptr = sync_flag_value_;
     }
   }
 
-  void set_post_descr(gni_post_descriptor_t* pd){
+  void setPostDescr(gni_post_descriptor_t* pd){
     pd_ = pd;
   }
 
-  void set_first_operand(uint64_t op){
+  void setFirstOperand(uint64_t op){
     first_op_ = op;
   }
 
-  void set_second_operand(uint64_t op){
+  void setSecondOperand(uint64_t op){
     second_op_ = op;
   }
 
-  void set_sync_flag_value(uint64_t f){
+  void setSyncFlagValue(uint64_t f){
     sync_flag_value_ = f;
   }
 
-  void set_sync_flag_addr(uint64_t a){
+  void setSyncFlagAddr(uint64_t a){
     sync_flag_addr_ = a;
   }
 
-  void set_cqwrite(uint64_t val){
+  void setCqwrite(uint64_t val){
     cqwrite_val_ = val;
   }
 
-  message* clone(payload_type_t ty) const override {
-    gni_rdma_message* msg = new gni_rdma_message;
-    switch (ty){
-    case eager_payload_ack:
-    case rdma_put_ack:
-    case rdma_get_ack:
-      msg->pd_ = pd_;
-      //acks only need the original post descriptor
-      gni_message::clone_into(msg);
-      break;
-    default:
-      clone_into(msg);
-      break;
-    }
-    return msg;
-  }
-
- protected:
-  void clone_into(gni_rdma_message* msg) const {
-    msg->first_op_ = first_op_;
-    msg->second_op_ = second_op_;
-    msg->cqwrite_val_ = cqwrite_val_;
-    gni_message::clone_into(msg);
+  sstmac::hw::NetworkMessage* cloneInjectionAck() const override {
+    auto* cln = new GNIRdmaMessage(*this);
+    cln->convertToAck();
+    return cln;
   }
 
  private:
@@ -178,9 +170,18 @@ class gni_rdma_message : public gni_message {
   uint64_t cqwrite_val_;
 };
 
-class gni_smsg_message : public gni_message {
+class GNISmsgMessage : public GNIMessage {
  public:
-  void set_tag(int tag){
+  template <class... Args>
+  GNISmsgMessage(uint64_t inst_id, uint64_t msg_id, int tag,
+                 Args&&... args) :
+    GNIMessage(inst_id, msg_id, GNI_POST_FMA_PUT,
+               std::forward<Args>(args)...),
+    tag_(tag)
+  {
+  }
+
+  void setTag(int tag){
     tag_ = tag;
   }
 
@@ -188,36 +189,35 @@ class gni_smsg_message : public gni_message {
     return tag_;
   }
 
-  message* clone(payload_type_t ty) const override {
-    gni_smsg_message* msg = new gni_smsg_message;
-    clone_into(msg);
-    return msg;
-  }
-
- protected:
-  void clone_into(gni_smsg_message* msg) const {
-    msg->tag_ = tag_;
-    gni_message::clone_into(msg);
+  NetworkMessage* cloneInjectionAck() const override {
+    auto* cln = new GNISmsgMessage(*this);
+    cln->convertToAck();
+    return cln;
   }
 
  private:
   int tag_;
 };
 
-class ugni_transport : public sstmac::sumi_transport
+class UGNITransport : public sumi::SimTransport
 {
-  RegisterAPI("ugni", ugni_transport)
  public:
-  ugni_transport(sprockit::sim_parameters* params,
-                 sstmac::sw::software_id sid,
-                 sstmac::sw::operating_system* os) :
-    sstmac::sumi_transport(params, sid, os),
+  SST_ELI_REGISTER_DERIVED(
+    API,
+    UGNITransport,
+    "macro",
+    "ugni",
+    SST_ELI_ELEMENT_VERSION(1,0,0),
+    "provides the UGNI transport API")
+
+  UGNITransport(SST::Params& params, sstmac::sw::App* app, SST::Component* comp) :
+    sumi::SimTransport(params, app, comp),
     pending_smsg_(4) //leave room for 4 cq for now, this can grow
   {
   }
 
   void init() override {
-    sstmac::sumi_transport::init();
+    sumi::SimTransport::init();
     //these are not ever used, but are needed for faking out real implementations
     setenv("PMI_GNI_LOC_ADDR", "0", 0);
     setenv("PMI_GNI_PTAG", "0", 0);
@@ -225,42 +225,42 @@ class ugni_transport : public sstmac::sumi_transport
     setenv("PMI_GNI_DEV_ID", "0", 0);
   }
 
-  int allocate_cq(){
-    int new_cq = sstmac::sumi_transport::allocate_cq();
+  int allocateCq(){
+    int new_cq = sumi::SimTransport::allocateCqId();
     if (new_cq >= pending_smsg_.size()){
       pending_smsg_.resize(new_cq+1);
     }
     return new_cq;
   }
 
-  void set_pending_smsg(int cq_id, gni_smsg_message* smsg){
+  void setPendingSmsg(int cq_id, GNISmsgMessage* smsg){
     pending_smsg_[cq_id] = smsg;
   }
 
-  gni_smsg_message* take_pending_smsg(int cq_id){
+  GNISmsgMessage* takePendingSmsg(int cq_id){
     auto ret = pending_smsg_[cq_id];
     pending_smsg_[cq_id] = nullptr;
     return ret;
   }
 
-  gni_return_t cg_get_event(gni_cq_handle_t cq_hndl, gni_cq_entry_t* event_data){
-    sumi::message* msg = blocking_poll(cq_hndl);
+  gni_return_t cgGetEvent(gni_cq_handle_t cq_hndl, gni_cq_entry_t* event_data){
+    sumi::Message* msg = blockingPoll(cq_hndl);
     intptr_t msgPtr = (intptr_t) msg;
     *event_data = msgPtr;
     return GNI_RC_SUCCESS;
   }
 
  private:
-  std::vector<gni_smsg_message*> pending_smsg_;
+  std::vector<GNISmsgMessage*> pending_smsg_;
 };
 
-ugni_transport* sstmac_ugni()
+UGNITransport* sstmac_ugni()
 {
-  sstmac::sw::thread* t = sstmac::sw::operating_system::current_thread();
-  return t->get_api<ugni_transport>();
+  sstmac::sw::Thread* t = sstmac::sw::OperatingSystem::currentThread();
+  return t->getApi<UGNITransport>("ugni");
 }
 
-sumi::transport* active_transport()
+sumi::Transport* activeTransport()
 {
   return sstmac_ugni(); 
 }
@@ -272,9 +272,9 @@ GNI_GetCompleted(
   gni_post_descriptor_t **post_descr)
 {
   debug(sstmac_ugni(), "GNI_CqGetCompleted(...)");
-  gni_message* e = (gni_message*) event_data;
-  auto rdma_msg = static_cast<gni_rdma_message*>(e);
-  rdma_msg->get_completed(post_descr);
+  GNIMessage* e = (GNIMessage*) event_data;
+  auto rdma_msg = static_cast<GNIRdmaMessage*>(e);
+  rdma_msg->getCompleted(post_descr);
   return GNI_RC_SUCCESS;
 }
 
@@ -284,10 +284,10 @@ GNI_CqGetEvent(
   gni_cq_entry_t* event_data) {
   auto tport = sstmac_ugni();
   double timeout = 10e-3; //try for at least 10 ms
-  sumi::message* msg = tport->poll(true, cq_hndl, timeout);
+  sumi::Message* msg = tport->poll(true, cq_hndl, timeout);
   if (msg){
     debug(tport, "GNI_CqGetEvent(...)");
-    intptr_t msg_ptr = (intptr_t) static_cast<gni_message*>(msg);
+    intptr_t msg_ptr = (intptr_t) static_cast<GNIMessage*>(msg);
     *event_data = msg_ptr;
     return GNI_RC_SUCCESS;
   } else {
@@ -296,7 +296,7 @@ GNI_CqGetEvent(
 }
 
 extern "C" uint64_t gni_cq_get_data(gni_cq_entry_t entry){
-  gni_message* e = (gni_message*) entry;
+  GNIMessage* e = (GNIMessage*) entry;
   return (uint64_t) e->data();
 }
 
@@ -326,13 +326,13 @@ extern "C" uint64_t gni_cq_rem_overrun(gni_cq_entry_t){
 }
 
 extern "C" uint64_t gni_cq_get_inst_id(gni_cq_entry_t entry){
-  gni_message* e = (gni_message*) entry;
-  return e->inst_id();
+  GNIMessage* e = (GNIMessage*) entry;
+  return e->instId();
 }
 
 extern "C" uint64_t gni_cq_get_rem_inst_id(gni_cq_entry_t entry){
-  gni_message* e = (gni_message*) entry;
-  return e->inst_id();
+  GNIMessage* e = (GNIMessage*) entry;
+  return e->instId();
 }
 
 extern "C" uint64_t gni_cq_get_tid(gni_cq_entry_t entry){
@@ -341,12 +341,12 @@ extern "C" uint64_t gni_cq_get_tid(gni_cq_entry_t entry){
 }
 
 extern "C" uint64_t gni_cq_get_msg_id(gni_cq_entry_t entry){
-  gni_message* e = (gni_message*) entry;
-  return e->msg_id();
+  GNIMessage* e = (GNIMessage*) entry;
+  return e->msgId();
 }
 
 extern "C" uint64_t gni_cq_get_type(gni_cq_entry_t entry){
-  gni_message* e = (gni_message*) entry;
+  GNIMessage* e = (GNIMessage*) entry;
   return e->type();
 }
 
@@ -386,13 +386,13 @@ extern "C" uint64_t gni_cq_get_trans_type(gni_cq_entry_t){
 }
 
 extern "C" void     gni_cq_set_inst_id(gni_cq_entry_t* entry, uint64_t id){
-  gni_message* e = (gni_message*) entry;
-  e->set_inst_id(id);
+  GNIMessage* e = (GNIMessage*) entry;
+  e->setInstId(id);
 }
 
 extern "C" void     gni_cq_set_rem_inst_id(gni_cq_entry_t* entry, uint64_t id){
-  gni_message* e = (gni_message*) entry;
-  e->set_inst_id(id);
+  GNIMessage* e = (GNIMessage*) entry;
+  e->setInstId(id);
 }
 
 extern "C" void     gni_cq_set_tid(gni_cq_entry_t *,uint64_t){
@@ -400,13 +400,13 @@ extern "C" void     gni_cq_set_tid(gni_cq_entry_t *,uint64_t){
 }
 
 extern "C" void     gni_cq_set_msg_id(gni_cq_entry_t* entry, uint64_t id){
-  gni_message* e = (gni_message*) entry;
-  e->set_msg_id(id);
+  GNIMessage* e = (GNIMessage*) entry;
+  e->setMsgId(id);
 }
 
 extern "C" void     gni_cq_set_type(gni_cq_entry_t* entry, uint64_t ty){
-  gni_message* e = (gni_message*) entry;
-  e->set_type((gni_post_type_t)ty);
+  GNIMessage* e = (GNIMessage*) entry;
+  e->setType((gni_post_type_t)ty);
 }
 
 extern "C" void     gni_cq_clr_status(gni_cq_entry_t *){
@@ -798,7 +798,7 @@ extern "C" gni_return_t GNI_CqCreate(
     spkt_abort_printf("cannot create completion queue with callback function");
   }
   auto tport = sstmac_ugni();
-  *cq_hndl = tport->allocate_cq();
+  *cq_hndl = tport->allocateCq();
   debug(tport, "GNI_CqCreate(...)");
   return GNI_RC_SUCCESS;
 }
@@ -814,20 +814,11 @@ static gni_return_t post_rdma_op(
   gni_ep_handle_t              ep_hndl,
   gni_post_descriptor_t        *post_descr) 
 {
-  ugni_transport* api = sstmac_ugni();
-  gni_rdma_message* msg = new gni_rdma_message;
-  msg->set_inst_id(api->rank());
-  msg->set_post_descr(post_descr);
-  msg->set_type(post_descr->type);
-  msg->set_byte_length(post_descr->length);
-  msg->set_first_operand(post_descr->first_operand);
-  msg->set_second_operand(post_descr->second_operand);
-  msg->set_cqwrite(post_descr->cqwrite_value);
-  msg->remote_buffer().ptr = (void*) post_descr->remote_addr;
-  msg->local_buffer().ptr = (void*) post_descr->local_addr;
+  UGNITransport* api = sstmac_ugni();
   gni_cq_handle_t src_cq = post_descr->src_cq_hndl
       ? post_descr->src_cq_hndl
       : ep_hndl->cq_id;
+
   switch(post_descr->type)
   {
   case GNI_POST_FMA_GET:
@@ -836,23 +827,25 @@ static gni_return_t post_rdma_op(
     bool recv_ack = (post_descr->cq_mode | GNI_CQMODE_GLOBAL_EVENT)
                     || (post_descr->cq_mode | GNI_CQMODE_LOCAL_EVENT);
     bool send_ack = post_descr->cq_mode | GNI_CQMODE_REMOTE_EVENT;
-    api->rdma_get(ep_hndl->ep_id, msg,
-                  send_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::message::no_ack,
-                  recv_ack ? src_cq : sumi::message::no_ack);
+    api->rdmaGet<GNIRdmaMessage>(ep_hndl->ep_id, post_descr->length,
+                  (void*)post_descr->local_addr, (void*)post_descr->remote_addr,
+                  recv_ack ? src_cq : sumi::Message::no_ack,
+                  send_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::Message::no_ack,
+                  sumi::Message::pt2pt, api->rank(), post_descr);
     return GNI_RC_SUCCESS;
   }
   case GNI_POST_FMA_PUT_W_SYNCFLAG:
-    msg->set_sync_flag_value(post_descr->sync_flag_value);
-    msg->set_sync_flag_addr(post_descr->sync_flag_addr);
   case GNI_POST_RDMA_PUT:
   case GNI_POST_FMA_PUT:
   {
     bool send_ack = (post_descr->cq_mode | GNI_CQMODE_GLOBAL_EVENT)
                     || (post_descr->cq_mode | GNI_CQMODE_LOCAL_EVENT);
     bool recv_ack = post_descr->cq_mode | GNI_CQMODE_REMOTE_EVENT;
-    api->rdma_put(ep_hndl->ep_id, msg,
-                  send_ack ? src_cq : sumi::message::no_ack,
-                  recv_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::message::no_ack);
+    api->rdmaPut<GNIRdmaMessage>(ep_hndl->ep_id, post_descr->length,
+                 (void*) post_descr->local_addr, (void*) post_descr->remote_addr,
+                 send_ack ? src_cq : sumi::Message::no_ack,
+                 recv_ack ? post_descr->remote_mem_hndl.cq_handle : sumi::Message::no_ack,
+                 sumi::Message::pt2pt, api->rank(), post_descr);
     return GNI_RC_SUCCESS;
   } 
   default:
@@ -863,7 +856,6 @@ static gni_return_t post_rdma_op(
 extern "C" gni_return_t GNI_PostRdma(
   gni_ep_handle_t              ep_hndl,
   gni_post_descriptor_t        *post_descr) {
-  gni_rdma_message* msg = new gni_rdma_message;
   debug(sstmac_ugni(), "GNI_PostRdma(...)");
   return post_rdma_op(ep_hndl, post_descr);
 }
@@ -873,7 +865,6 @@ extern "C" gni_return_t GNI_PostRdma(
 extern "C" gni_return_t GNI_PostFma(
   gni_ep_handle_t              ep_hndl,
   gni_post_descriptor_t        *post_descr) {
-  gni_rdma_message* msg = new gni_rdma_message;
   debug(sstmac_ugni(), "GNI_PostFma(...)");
   return post_rdma_op(ep_hndl, post_descr);
 }
@@ -999,30 +990,27 @@ extern "C" gni_return_t GNI_SmsgSendWTag(
   void                 *data,
   uint32_t             data_length,
   uint32_t             msg_id,
-  uint8_t              tag) {
-  gni_smsg_message* msg = new gni_smsg_message;
-  msg->set_byte_length(data_length + header_length);
-  msg->set_tag(tag);
+  uint8_t              tag)
+{
+  char* data_buf = nullptr;
   if (header || data){
-    char* data_buf = new char[header_length + data_length];
+    data_buf = new char[header_length + data_length];
     if (header) ::memcpy(data_buf, header, header_length);
     if (data) ::memcpy(data_buf + header_length, data, data_length);
-    msg->local_buffer().ptr = data_buf;
   }
-  ugni_transport* api = sstmac_ugni();
-  msg->set_msg_id(msg_id);
-  msg->set_inst_id(api->rank());
+  UGNITransport* api = sstmac_ugni();
   debug(api, "GNI_SmsgSendWTag(tag=%d,...)", tag);
-  api->smsg_send(ep_hndl->ep_id, sumi::message::eager_payload, msg,
-                 sumi::message::no_ack, ep_hndl->cq_id);
+  api->smsgSend<GNISmsgMessage>(ep_hndl->ep_id, data_length, data_buf,
+                sumi::Message::no_ack, ep_hndl->cq_id, sumi::Message::pt2pt,
+                api->rank(), msg_id, tag);
   return GNI_RC_SUCCESS;
 }
 
-static gni_smsg_message* poll_for_next_smsg(ugni_transport* api, int cq_id){
+static GNISmsgMessage* poll_for_next_smsg(UGNITransport* api, int cq_id){
   double timeout = 10e-3; //block for at least 10 ms
-  sumi::message* msg = api->poll(sumi::message::eager_payload, true, cq_id, timeout);
-  if (msg->payload_type() == sumi::message::eager_payload){
-    return dynamic_cast<gni_smsg_message*>(msg);
+  sumi::Message* msg = api->poll(true, cq_id, timeout);
+  if (msg->NetworkMessage::type() == NetworkMessage::payload){
+    return dynamic_cast<GNISmsgMessage*>(msg);
   } else {
     return nullptr;
   }
@@ -1031,11 +1019,11 @@ static gni_smsg_message* poll_for_next_smsg(ugni_transport* api, int cq_id){
 extern "C" gni_return_t GNI_SmsgGetNext(
   gni_ep_handle_t     ep_hndl,
   void                **header) {
-  ugni_transport* api = sstmac_ugni();
+  UGNITransport* api = sstmac_ugni();
   debug(api, "GNI_GetNext(...)")
   auto smsg = poll_for_next_smsg(api, ep_hndl->cq_id);
   if (smsg){
-    *header = smsg->local_buffer().ptr;
+    *header = smsg->localBuffer();
     return GNI_RC_SUCCESS;
   } else {
     return GNI_RC_NOT_DONE;
@@ -1046,16 +1034,16 @@ extern "C" gni_return_t GNI_SmsgGetNextWTag(
   gni_ep_handle_t     ep_hndl,
   void                **header,
   uint8_t             *tag) {
-  ugni_transport* api = sstmac_ugni();
+  UGNITransport* api = sstmac_ugni();
   debug(api, "GNI_GetNextWTag(tag=%d,...)", *tag)
   auto smsg = poll_for_next_smsg(api, ep_hndl->cq_id);
   if (smsg){
     if (*tag == GNI_SMSG_ANY_TAG){
-      api->set_pending_smsg(ep_hndl->cq_id, smsg);
+      api->setPendingSmsg(ep_hndl->cq_id, smsg);
       *tag = smsg->tag();
       return GNI_RC_SUCCESS;
     } else if (*tag == smsg->tag()){
-      api->set_pending_smsg(ep_hndl->cq_id, smsg);
+      api->setPendingSmsg(ep_hndl->cq_id, smsg);
       *tag = smsg->tag();
       return GNI_RC_SUCCESS;
     } else {
@@ -1070,11 +1058,11 @@ extern "C" gni_return_t GNI_SmsgRelease(
   gni_ep_handle_t      ep_hndl) {
   auto api = sstmac_ugni();
   debug(api, "GNI_SmsgRelease(...)");
-  gni_smsg_message* smsg = api->take_pending_smsg(ep_hndl->cq_id);
+  GNISmsgMessage* smsg = api->takePendingSmsg(ep_hndl->cq_id);
   if (!smsg){
     return GNI_RC_INVALID_STATE;
   } else {
-    char* buffer = (char*) smsg->local_buffer().ptr;
+    char* buffer = (char*) smsg->localBuffer();
     if (buffer) delete[] buffer;
     delete smsg;
   }

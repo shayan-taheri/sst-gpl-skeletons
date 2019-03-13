@@ -94,7 +94,7 @@ ibv_transport* sstmac_ibv()
   return tp;
 }
 
-sumi::transport* active_transport()
+sumi::transport* activeTransport()
 {
   return sstmac_ibv();
 }
